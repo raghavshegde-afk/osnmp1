@@ -41,15 +41,30 @@ void print_prompt(ShellState *shell){
 
     char *display_path = cwd;
 
-    int home_fold_len = strlen(shell->home);
+    int home_fpath_len = strlen(shell->home);
 
-    if (strncmp(cwd, shell->home, home_fold_len) == 0 &&
-    (cwd[home_fold_len] == '\0' || cwd[home_fold_len] == '/')) {
-        int suffix_len = strlen(cwd + home_fold_len);
+    if (strncmp(cwd, shell->home, home_fpath_len) == 0 &&
+    (cwd[home_fpath_len] == '\0' || cwd[home_fpath_len] == '/')) {
+        int suffix_len = strlen(cwd + home_fpath_len);
         char *short_path = malloc(suffix_len + 2);
         if (short_path != NULL) {
-            sprintf(short_path, "~%s", cwd + home_fold_len);
+            sprintf(short_path, "~%s", cwd + home_fpath_len);
             display_path = short_path;
         }
     }
+
+    printf(
+        "<%s@%s:%s> ",
+        username,
+        hostname,
+        display_path
+    );
+
+    fflush(stdout);
+
+    if (display_path != cwd) {
+        free(display_path);
+    }
+
+    free(cwd);
 }
