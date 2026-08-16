@@ -3,6 +3,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <dirent.h>
+#include <sys/stat.h>
 
 static char *history_path(ShellState *shell){
     char *path=malloc(strlen(shell->home)+20);
@@ -259,3 +261,23 @@ int hop(ShellState *shell,char **args,int count){
     return 1;
 }
 
+static char *resolve_dir(ShellState *shell,char *name)
+{
+    char *path;
+
+    if(strcmp(name,"~")==0)
+        return strdup(shell->home);
+
+    if(strcmp(name,"-")==0){
+        if(!shell->have_prev)
+            return NULL;
+        return strdup(shell->prev);
+    }
+
+    if(strcmp(name,".")==0 || strcmp(name,"..")==0)
+        return realpath(name,NULL);
+
+    path=realpath(name,NULL);
+
+    return path;
+}

@@ -4,5 +4,6 @@
 #include "shell.h"
 
 int hop(ShellState *shell,char **args,int count);
+int reveal(ShellState *shell,char **args,int count);
 
 #endif
