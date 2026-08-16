@@ -56,6 +56,163 @@ char *make_word(const char *line, int *index, int *error)
             break;
         }
 
+        if(line[*index]=='\\') {//single slash escape character
+        (*index)++;
+
+            if(line[*index]=='\0') {
+                free(word);
+                *error = 1;
+                return NULL;
+            }
+
+            if(length+1>=capacity) {
+                capacity*=2;
+
+                char *new_word=realloc(word, capacity);
+
+                if(new_word==NULL) {
+                    free(word);
+                    *error = 1;
+                    return NULL;
+                }
+
+                word=new_word;
+            }
+
+            word[length]=line[*index];
+            length++;
+            (*index)++;
+
+            continue;
+        }
+
+        if(line[*index]=='\''){//single inverted comma escape character
+            (*index)++;
+
+            while(line[*index]!='\0' &&
+              line[*index]!='\'') {
+
+                if(length+1>=capacity){
+                    capacity*=2;
+
+                    char *new_word=realloc(word,capacity);
+
+                    if(new_word==NULL){
+                        free(word);
+                        *error=1;
+                        return NULL;
+                    }
+
+                    word=new_word;
+                }
+
+                word[length]=line[*index];
+                length++;
+                (*index)++;
+            }
+
+            if(line[*index]=='\0'){
+                free(word);
+                *error=1;
+                return NULL;
+            }
+
+            (*index)++;
+            continue;
+        }
+
+        if(line[*index]=='"'){//double inverted comma escape character
+           (*index)++;
+
+            while(line[*index]!='\0' &&
+                line[*index]!='"'){
+
+                if(line[*index]=='\\'){
+                    (*index)++;
+
+                    if(line[*index]=='\0'){
+                        free(word);
+                        *error=1;
+                        return NULL;
+                    }
+
+                    if(line[*index]=='"' ||
+                        line[*index]=='\\'){
+
+                        if(length+1>=capacity){
+                            capacity*=2;
+
+                            char *new_word=realloc(word,capacity);
+
+                            if(new_word==NULL){
+                                free(word);
+                                *error=1;
+                                return NULL;
+                            }
+
+                            word=new_word;
+                        }
+
+                        word[length]=line[*index];
+                        length++;
+                        (*index)++;
+                    }else{
+
+                        if(length+2>=capacity){
+                            capacity*=2;
+
+                            char *new_word=realloc(word,capacity);
+
+                            if(new_word==NULL){
+                                free(word);
+                                *error=1;
+                                return NULL;
+                            }
+
+                            word=new_word;
+                        }
+
+                        word[length]='\\';
+                        length++;
+
+                        word[length]=line[*index];
+                        length++;
+
+                        (*index)++;
+                    }
+
+                    continue;
+                }
+
+                if(length+1>=capacity){
+                    capacity*=2;
+
+                    char *new_word=realloc(word,capacity);
+
+                    if(new_word==NULL){
+                        free(word);
+                        *error=1;
+                        return NULL;
+                    }
+
+                    word=new_word;
+                }
+
+                word[length]=line[*index];
+                length++;
+                (*index)++;
+            }
+
+            if(line[*index]=='\0'){
+                free(word);
+                *error=1;
+                return NULL;
+            }
+
+            (*index)++;
+            continue;
+        }
+
         if (length+1>=capacity) {
             capacity*=2;
 
@@ -87,11 +244,12 @@ Token *lex_line(const char *line, int *count)
 
     int index = 0;
 
-    while (line[index] != '\0') {
+    while (line[index] != '\0') {//figuring out what kinda token it is
         if (is_space_ch(line[index])) {
             index++;
             continue;
         }
+        
         if (line[index]=='|') {
             tokens = add_token(tokens,count,TOK_PIPE,NULL);
 
@@ -146,6 +304,30 @@ Token *lex_line(const char *line, int *count)
 
             index++;
             continue;
+        }
+
+        int error = 0;
+
+        char *word = make_word(
+            line,
+            &index,
+            &error
+        );
+
+        if (error) {
+            free(tokens);
+            return NULL;
+        }
+
+        tokens = add_token(
+            tokens,
+            count,
+            TOK_WORD,
+            word
+        );
+
+        if (tokens == NULL) {
+            return NULL;
         }
         // int start = index;
 
