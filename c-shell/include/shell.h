@@ -8,14 +8,14 @@ typedef struct {
 } ShellState;
 
 typedef enum {
-    TOK_WORD,
-    TOK_PIPE,
-    TOK_AMP,
-    TOK_SEMI,
-    TOK_LT,
-    TOK_GT,
-    TOK_GTGT,
-    TOK_END
+    TOK_WORD,//genuinely any word
+    TOK_PIPE,// |
+    TOK_AMP,// &
+    TOK_SEMI,// ;
+    TOK_LT,// <
+    TOK_GT,// >
+    TOK_GTGT,// >>
+    TOK_END// \0
 } TokenType;
 
 
