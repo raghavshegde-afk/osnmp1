@@ -397,3 +397,128 @@ int reveal(ShellState *shell,char **args,int count){
     free(path);
     return 1;
 }
+
+static void print_lines(char **lines,int count,int number,int reverse){
+    if(reverse){
+        // for(int i=count-1;i>=0;i--){
+        //     if(number) printf("%d %s",i+1,lines[i]);
+        //     else printf("%s",lines[i]);
+        // }
+        int line_no=0;
+
+        if(number){
+            for(int i=0;i<count;i++){
+                if(lines[i][0]!='\n' && lines[i][0]!='\0')
+                    line_no++;
+            }
+        }
+
+        for(int i=count-1;i>=0;i--){
+            if(number){
+                if(lines[i][0]!='\n' && lines[i][0]!='\0'){
+                    printf("%d %s",line_no,lines[i]);
+                    line_no--;
+                }
+                else{
+                    printf("%s",lines[i]);
+                }
+            }
+            else{
+                printf("%s",lines[i]);
+            }
+        }
+    }
+    else{
+        int line_no=1;
+
+        for(int i=0;i<count;i++){
+            if(number){
+                if(lines[i][0]!='\n' && lines[i][0]!='\0'){
+                    printf("%d %s",line_no,lines[i]);
+                    line_no++;
+                }
+            }
+            else printf("%s",lines[i]);
+            
+        }
+    }
+}
+
+static int peek_file(char *filename,int number,int reverse){
+    FILE *file;
+
+    if(strcmp(filename,"-")==0) file=stdin;
+    else{
+        struct stat st;
+
+        if(stat(filename,&st)!=0){
+            printf("peek: no such file or directory\n");
+            return 0;
+        }
+
+        if(S_ISDIR(st.st_mode)){
+            printf("peek: is a directory\n");
+            return 0;
+        }
+
+        file=fopen(filename,"r");
+
+        if(file==NULL){
+            printf("peek: no such file or directory\n");
+            return 0;
+        }
+    }
+
+    char **lines=NULL;
+    int count=0;
+    char *line=NULL;
+    size_t size=0;
+
+    while(getline(&line,&size,file)!=-1){
+        char **new_lines=realloc(
+            lines,
+            (count+1)*sizeof(char *)
+        );
+
+        if(new_lines==NULL){
+            free(line);
+
+            for(int i=0;i<count;i++) free(lines[i]);
+
+            free(lines);
+
+            if(file!=stdin) fclose(file);
+
+            return 0;
+        }
+
+        lines=new_lines;
+        lines[count]=strdup(line);
+
+        if(lines[count]==NULL){
+            free(line);
+
+            for(int i=0;i<count;i++) free(lines[i]);
+
+            free(lines);
+
+            if(file!=stdin) fclose(file);
+
+            return 0;
+        }
+
+        count++;
+    }
+
+    free(line);
+
+    if(file!=stdin) fclose(file);
+
+    print_lines(lines,count,number,reverse);
+
+    for(int i=0;i<count;i++) free(lines[i]);
+
+    free(lines);
+
+    return 1;
+}
