@@ -3,9 +3,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-
+#include <fcntl.h>//file control
 #include <dirent.h>      // DIR, opendir, readdir, closedir essentially open directories
 #include <sys/stat.h>   // struct stat, stat, S_ISDIR info about filesystem and path
+
+static int peek_reverse(char *filename,int number);
 
 static char *history_path(ShellState *shell){
     char *path=malloc(strlen(shell->home)+20);
@@ -451,6 +453,7 @@ static int peek_file(char *filename,int number,int reverse){
     else{
         struct stat st;
 
+        
         if(stat(filename,&st)!=0){
             printf("peek: no such file or directory\n");
             return 0;
@@ -460,6 +463,7 @@ static int peek_file(char *filename,int number,int reverse){
             printf("peek: is a directory\n");
             return 0;
         }
+        if(reverse && S_ISREG(st.st_mode)) return peek_reverse(filename,number);
 
         file=fopen(filename,"r");
 
@@ -519,6 +523,144 @@ static int peek_file(char *filename,int number,int reverse){
     for(int i=0;i<count;i++) free(lines[i]);
 
     free(lines);
+
+    return 1;
+}
+
+static int peek_reverse(char *filename,int number)
+{
+    int fd=open(filename,O_RDONLY);
+
+    if(fd<0){
+        printf("peek: no such file or directory\n");
+        return 0;
+    }
+
+    char buf[4096];
+    char *line=NULL;
+    int line_len=0;
+    int line_no=0;
+    int has_char=0;
+    off_t end=lseek(fd,0,SEEK_END);
+
+    if(end<0){
+        close(fd);
+        return 0;
+    }
+
+    // count non-empty lines
+    if(lseek(fd,0,SEEK_SET)<0){
+        close(fd);
+        return 0;
+    }
+
+    ssize_t n;
+    while((n=read(fd,buf,sizeof(buf)))>0){
+        for(int i=0;i<n;i++){
+            if(buf[i]=='\n'){
+                if(has_char) line_no++;
+                has_char=0;
+            }
+            else{
+                has_char=1;
+            }
+        }
+    }
+
+    if(has_char) line_no++;
+
+    //read backwards 
+    if(lseek(fd,end,SEEK_SET)<0){
+        close(fd);
+        return 0;
+    }
+
+    int current_no=line_no;
+
+    while(end>0){
+        // int chunk=end>sizeof(buf) ? sizeof(buf) : end; possibly caused error idk exactly why
+        size_t chunk=end>(off_t)sizeof(buf) ? sizeof(buf) : (size_t)end;
+
+        end-=chunk;
+
+        if(lseek(fd,end,SEEK_SET)<0) break;
+
+        n=read(fd,buf,chunk);
+
+        if(n<=0) break;
+
+        for(int i=n-1;i>=0;i--){
+            if(buf[i]=='\n'){
+                if(line_len>0){
+                    if(number) printf("%d ",current_no--);
+
+                    for(int j=line_len-1;j>=0;j--) putchar(line[j]);
+
+                    putchar('\n');
+                }
+                else{
+                    putchar('\n');
+                }
+
+                line_len=0;
+            }
+            else{
+                char *new_line=realloc(line,line_len+1);
+
+                if(new_line==NULL){
+                    free(line);
+                    close(fd);
+                    return 0;
+                }
+
+                line=new_line;
+                line[line_len++]=buf[i];
+            }
+        }
+    }
+
+    if(line_len>0){
+        if(number) printf("%d ",current_no);
+
+        for(int i=line_len-1;i>=0;i--) putchar(line[i]);
+    }
+
+    free(line);
+    close(fd);
+
+    return 1;
+}
+
+
+int peek(char **args,int count){
+    int number=0;
+    int reverse=0;
+    int files=0;
+
+    for(int i=0;i<count;i++){
+        if(args[i][0]=='-' && args[i][1]!='\0'){
+            for(int j=1;args[i][j]!='\0';j++){
+                if(args[i][j]=='n') number=1;
+                else if(args[i][j]=='r') reverse=1;
+                else{
+                    printf("peek: invalid syntax\n");
+                    return 0;
+                }
+            }
+        }
+        else{
+            files++;
+        }
+    }
+
+    if(files==0) return peek_file("-",number,reverse);
+
+    for(int i=0;i<count;i++){
+
+        if(args[i][0]=='-' && args[i][1]!='\0') continue;
+
+        if(!peek_file(args[i],number,reverse)) return 0;
+    }
 
     return 1;
 }
