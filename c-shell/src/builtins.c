@@ -297,6 +297,8 @@ static void print_dir(char *path,int all,int recursive){
     struct dirent *entry;
 
     while((entry=readdir(dir))!=NULL){
+        if(strcmp(entry->d_name,".")==0 ||strcmp(entry->d_name,"..")==0)continue;
+        
         if(!all && entry->d_name[0]=='.') continue;
 
         char **new_names=realloc(names,(count+1)*sizeof(char *));//to retain og pointer
@@ -333,11 +335,8 @@ static void print_dir(char *path,int all,int recursive){
 
         struct stat st;
 
-        if(stat(full,&st)==0 && S_ISDIR(st.st_mode))
-            printf("%s/\n",names[i]);
-        else
-            printf("%s\n",names[i]);
-
+        if(stat(full,&st)==0 && S_ISDIR(st.st_mode)) printf("%s/\n",names[i]);
+        else printf("%s\n",names[i]);
         if(recursive &&
            stat(full,&st)==0 &&
            S_ISDIR(st.st_mode)){
