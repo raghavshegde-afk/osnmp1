@@ -664,3 +664,65 @@ int peek(char **args,int count){
 
     return 1;
 }
+
+int locate(char **args,int count){
+    char *path_env=getenv("PATH");
+
+    for(int i=0;i<count;i++){
+        int found=0;
+
+        char *cwd=getcwd(NULL,0);
+
+        if(cwd!=NULL){
+            char *path=malloc(
+                strlen(cwd)+strlen(args[i])+2
+            );
+
+            if(path!=NULL){
+                sprintf(path,"%s/%s",cwd,args[i]);
+
+                if(access(path,X_OK)==0){
+                    // printf("DEBUG: %s\n",path);
+                    printf("%s\n",path);
+                    found=1;
+                }
+
+                free(path);
+            }
+
+            free(cwd);
+        }
+
+        if(path_env!=NULL){
+            char *copy=strdup(path_env);
+            char *dir=strtok(copy,":");
+
+            while(dir!=NULL){
+                char *path=malloc(
+                    strlen(dir)+strlen(args[i])+2
+                );
+
+                if(path!=NULL){
+                    sprintf(path,"%s/%s",dir,args[i]);
+
+                    if(access(path,X_OK)==0){
+                        
+                        printf("%s\n",path);
+                        found=1;
+
+                    }
+
+                    free(path);
+                }
+
+                dir=strtok(NULL,":");
+            }
+
+            free(copy);
+        }
+
+        if(!found) printf("locate: command not found (%s)\n",args[i]);
+    }
+
+    return 1;
+}
