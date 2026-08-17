@@ -3,8 +3,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <dirent.h>
-#include <sys/stat.h>
+
+#include <dirent.h>      // DIR, opendir, readdir, closedir essentially open directories
+#include <sys/stat.h>   // struct stat, stat, S_ISDIR info about filesystem and path
 
 static char *history_path(ShellState *shell){
     char *path=malloc(strlen(shell->home)+20);
@@ -265,8 +266,7 @@ static char *resolve_dir(ShellState *shell,char *name)
 {
     char *path;
 
-    if(strcmp(name,"~")==0)
-        return strdup(shell->home);
+    if(strcmp(name,"~")==0) return strdup(shell->home);
 
     if(strcmp(name,"-")==0){
         if(!shell->have_prev)
@@ -274,10 +274,127 @@ static char *resolve_dir(ShellState *shell,char *name)
         return strdup(shell->prev);
     }
 
-    if(strcmp(name,".")==0 || strcmp(name,"..")==0)
-        return realpath(name,NULL);
+    if(strcmp(name,".")==0 || strcmp(name,"..")==0) return realpath(name,NULL);
 
     path=realpath(name,NULL);
 
     return path;
+}
+
+static int compare_names(const void *a,const void *b){
+    char *const *x=a;
+    char *const *y=b;
+    return strcmp(*x,*y);
+}
+
+static void print_dir(char *path,int all,int recursive){
+    DIR *dir=opendir(path);
+
+    if(dir==NULL) return;
+
+    char **names=NULL;
+    int count=0;
+    struct dirent *entry;
+
+    while((entry=readdir(dir))!=NULL){
+        if(!all && entry->d_name[0]=='.') continue;
+
+        char **new_names=realloc(names,(count+1)*sizeof(char *));//to retain og pointer
+
+        if(new_names==NULL) break;
+
+        names=new_names;
+        names[count]=strdup(entry->d_name);
+
+        if(names[count]==NULL) break;
+
+        count++;
+    }
+
+    closedir(dir);
+
+    qsort(
+        names,
+        count,
+        sizeof(char *),
+        compare_names
+    );
+
+    for(int i=0;i<count;i++){
+        char full[4096];
+
+        snprintf(
+            full,
+            sizeof(full),
+            "%s/%s",
+            path,
+            names[i]
+        );
+
+        struct stat st;
+
+        if(stat(full,&st)==0 && S_ISDIR(st.st_mode))
+            printf("%s/\n",names[i]);
+        else
+            printf("%s\n",names[i]);
+
+        if(recursive &&
+           stat(full,&st)==0 &&
+           S_ISDIR(st.st_mode)){
+            print_dir(full,all,recursive);
+        }
+
+        free(names[i]);//free memory
+    }
+
+    free(names);//free pointer
+}
+
+int reveal(ShellState *shell,char **args,int count){
+    int all=0;
+    int recursive=0;
+    char *target=NULL;
+
+    for(int i=0;i<count;i++){
+        if(args[i][0]=='-' && args[i][1]!='\0'){//start with - is flag,cannot simply exist in vacuum
+            for(int j=1;args[i][j]!='\0';j++){
+
+                if(args[i][j]=='a')all=1;
+                else if(args[i][j]=='t')recursive=1;
+                else{
+                    printf("reveal: invalid syntax\n");
+                    return 0;
+                }
+            }
+        }
+        else{
+            if(target!=NULL){
+                printf("reveal: invalid syntax\n");
+                return 0;
+            }
+
+            target=args[i];
+        }
+    }
+
+    if(target==NULL) target=".";
+
+    char *path=resolve_dir(shell,target);
+
+    if(path==NULL){
+        printf("reveal: no such directory\n");
+        return 0;
+    }
+
+    struct stat st;
+
+    if(stat(path,&st)!=0 || !S_ISDIR(st.st_mode)){
+        free(path);
+        printf("reveal: no such directory\n");
+        return 0;
+    }
+
+    print_dir(path,all,recursive);
+    free(path);
+    return 1;
 }
