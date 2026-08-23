@@ -6,6 +6,8 @@
 #include <fcntl.h>//file control
 #include <dirent.h>      // DIR, opendir, readdir, closedir essentially open directories
 #include <sys/stat.h>   // struct stat, stat, S_ISDIR info about filesystem and path
+#include <time.h>
+#include <math.h>
 
 static int peek_reverse(char *filename,int number);
 
@@ -33,6 +35,7 @@ static void note_visit(ShellState *shell,const char *dir_path){
     char **paths=NULL;
     int *counts=NULL;
     int count=0;
+    time_t *times=NULL;
 
     if(file!=NULL){
         char line[4096+50];
@@ -40,9 +43,12 @@ static void note_visit(ShellState *shell,const char *dir_path){
         while(fgets(line,sizeof(line),file)!=NULL){
             int visits;
             char directory_path[4096];
+            long long last_visit_time
+            ;
 
-            if(sscanf(line,"%d %4095[^\n]",
-                      &visits,directory_path)!=2){
+            if(sscanf(line,"%d %lld %4095[^\n]",//path max is supposed to be a thing but whenever i try to implement it says it doesnt exist so i just use 4095
+                      &visits,&last_visit_time
+                      ,directory_path)!=3){
                 continue;
             }
 
@@ -56,7 +62,12 @@ static void note_visit(ShellState *shell,const char *dir_path){
                 (count+1)*sizeof(int)
             );
 
-            if(new_paths==NULL || new_counts==NULL){
+            time_t *new_times=realloc(
+                times,
+                (count+1)*sizeof(time_t)
+            );
+
+            if(new_paths==NULL || new_counts==NULL ||new_times==NULL){
                 free(new_paths);
                 free(new_counts);
                 break;
@@ -64,9 +75,11 @@ static void note_visit(ShellState *shell,const char *dir_path){
 
             paths=new_paths;
             counts=new_counts;
+            times=new_times;
 
             paths[count]=strdup(directory_path);
             counts[count]=visits;
+            times[count]=(time_t)last_visit_time;
 
             if(paths[count]==NULL){
                 break;
@@ -84,6 +97,7 @@ static void note_visit(ShellState *shell,const char *dir_path){
         if(strcmp(paths[i],dir_path)==0){
             counts[i]++;
             found=1;
+            times[i]=time(NULL);
             break;
         }
     }
@@ -99,14 +113,21 @@ static void note_visit(ShellState *shell,const char *dir_path){
             (count+1)*sizeof(int)
         );
 
-        if(new_paths!=NULL && new_counts!=NULL){
+        time_t *new_times=realloc(
+            times,
+            (count+1)*sizeof(time_t)
+        );
+
+        if(new_paths!=NULL && new_counts!=NULL&&new_times!=NULL){
             paths=new_paths;
             counts=new_counts;
+            times=new_times;
 
             paths[count]=strdup(dir_path);
 
             if(paths[count]!=NULL){
                 counts[count]=1;
+                times[count]=time(NULL);
                 count++;
             }
         }
@@ -116,7 +137,7 @@ static void note_visit(ShellState *shell,const char *dir_path){
 
     if(file!=NULL){
         for(int i=0;i<count;i++){
-            fprintf(file,"%d %s\n",counts[i],paths[i]);
+            fprintf(file,"%d %lld %s\n",counts[i],(long long)times[i],paths[i]);
         }
 
         fclose(file);
@@ -129,6 +150,7 @@ static void note_visit(ShellState *shell,const char *dir_path){
     free(paths);
     free(counts);
     free(path);
+    free(times);
 }
 
 static int ch_dir(ShellState *shell,char *path){
@@ -172,14 +194,14 @@ static char *find_frecency_match(ShellState *shell,char *name){
     char line[4096+50];
 
     char *best=NULL;
-    int best_count=-1;
-
+    double best_rating=-1 ;   
     while(fgets(line,sizeof(line),file)!=NULL){
         int visits;
+        long long last_visit;
         char dir_path[4096];
 
-        if(sscanf(line,"%d %4095[^\n]",
-                  &visits,dir_path)!=2){
+        if(sscanf(line,"%d %lld %4095[^\n]",
+                  &visits,&last_visit,dir_path)!=3){
             continue;
         }
 
@@ -190,9 +212,19 @@ static char *find_frecency_match(ShellState *shell,char *name){
         if(access(dir_path,F_OK)!=0){//looks if u can access
             continue;
         }
+        time_t now=time(NULL);
 
-        if(visits>best_count ||
-           (visits==best_count &&
+        double age=difftime(
+            now,
+            (time_t)last_visit
+
+        );
+
+        // double rating=visits+1000.0/(age+1.0);//to avoid division by zero. complete shit could be so much better,if i keep this recency bias vanishes after 1000 visits
+        double rating = visits + 100.0*exp(-age/86400.0);//86400 seconds in a day
+
+        if(rating>best_rating ||
+           (rating==best_rating &&
             (best==NULL || strcmp(dir_path,best)<0))){
 
             char *new_best=malloc(strlen(dir_path)+1);
@@ -206,7 +238,7 @@ static char *find_frecency_match(ShellState *shell,char *name){
             strcpy(new_best,dir_path);
             free(best);
             best=new_best;
-            best_count=visits;
+            best_rating=rating;
         }
     }
 
@@ -527,8 +559,7 @@ static int peek_file(char *filename,int number,int reverse){
     return 1;
 }
 
-static int peek_reverse(char *filename,int number)
-{
+static int peek_reverse(char *filename,int number){
     int fd=open(filename,O_RDONLY);
 
     if(fd<0){
@@ -594,12 +625,12 @@ static int peek_reverse(char *filename,int number)
                 if(line_len>0){
                     if(number) printf("%d ",current_no--);
 
-                    for(int j=line_len-1;j>=0;j--) putchar(line[j]);
+                    for(int j=line_len-1;j>=0;j--) printf("%c", line[j]);;
 
-                    putchar('\n');
+                    printf("\n");
                 }
                 else{
-                    putchar('\n');
+                    printf("\n");
                 }
 
                 line_len=0;
@@ -622,7 +653,9 @@ static int peek_reverse(char *filename,int number)
     if(line_len>0){
         if(number) printf("%d ",current_no);
 
-        for(int i=line_len-1;i>=0;i--) putchar(line[i]);
+        for(int i=line_len-1;i>=0;i--) printf("%c",line[i]);
+
+        printf("\n");
     }
 
     free(line);
