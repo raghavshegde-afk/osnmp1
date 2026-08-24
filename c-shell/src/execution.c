@@ -97,3 +97,88 @@ int execute_command(Command *command){
 
     return 1;
 }
+
+int execute_pipe(Command *left, Command *right){
+    int fd[2];
+
+    if (pipe(fd) < 0) {
+        perror("cshell: pipe");
+        return 0;
+    }
+
+    pid_t left_pid = fork();
+
+    if (left_pid < 0) {
+        perror("cshell: fork");
+        close(fd[0]);
+        close(fd[1]);
+        return 0;
+    }
+
+    if (left_pid == 0) {
+
+        
+        // Left command writes into the pipe.
+        
+        if (dup2(fd[1], STDOUT_FILENO) < 0) {
+            perror("cshell: dup2");
+            exit(EXIT_FAILURE);
+        }
+
+        close(fd[0]);
+        close(fd[1]);
+
+        execvp(left->args[0], left->args);
+
+        fprintf(
+            stderr,
+            "cshell: command not found (%s)\n",
+            left->args[0]
+        );
+
+        exit(EXIT_FAILURE);
+    }
+
+    pid_t right_pid = fork();
+
+    if (right_pid < 0) {
+        perror("cshell: fork");
+        close(fd[0]);
+        close(fd[1]);
+        waitpid(left_pid, NULL, 0);
+        return 0;
+    }
+
+    if (right_pid == 0) {
+
+        
+        // Right command reads from the pipe.
+        
+        if (dup2(fd[0], STDIN_FILENO) < 0) {
+            perror("cshell: dup2");
+            exit(EXIT_FAILURE);
+        }
+
+        close(fd[0]);
+        close(fd[1]);
+
+        execvp(right->args[0], right->args);
+
+        fprintf(
+            stderr,
+            "cshell: command not found (%s)\n",
+            right->args[0]
+        );
+
+        exit(EXIT_FAILURE);
+    }
+
+    // Parent doesn't use the pipe.
+    close(fd[0]);
+    close(fd[1]);
+
+    waitpid(left_pid, NULL, 0);
+    waitpid(right_pid, NULL, 0);
+
+    return 1;
+}

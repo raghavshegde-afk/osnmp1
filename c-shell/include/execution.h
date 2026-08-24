@@ -15,4 +15,6 @@ typedef struct {
 
 int execute_command(Command *command);
 
+int execute_pipe(Command *left, Command *right);
+
 #endif
