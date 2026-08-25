@@ -8,95 +8,95 @@
 
 #include <fcntl.h>
 
-int execute_command(Command *command){
-    if (command == NULL ||
-        command->args == NULL ||
-        command->args[0] == NULL) {
-        return 0;
-    }
+// int execute_command(Command *command){
+//     if (command == NULL ||
+//         command->args == NULL ||
+//         command->args[0] == NULL) {
+//         return 0;
+//     }
 
-    pid_t pid = fork();
+//     pid_t pid = fork();
 
-    if (pid < 0) {
-        perror("cshell: fork");
-        return 0;
-    }
+//     if (pid < 0) {
+//         perror("cshell: fork");
+//         return 0;
+//     }
 
-    if (pid == 0) {
+//     if (pid == 0) {
 
-        // input redirection < 
-        if (command->input_file != NULL) {
+//         // input redirection < 
+//         if (command->input_file != NULL) {
 
-            int fd = open(
-                command->input_file,
-                O_RDONLY
-            );
+//             int fd = open(
+//                 command->input_file,
+//                 O_RDONLY
+//             );
 
-            if (fd < 0) {
-                perror("cshell");
-                exit(EXIT_FAILURE);
-            }
+//             if (fd < 0) {
+//                 perror("cshell");
+//                 exit(EXIT_FAILURE);
+//             }
 
-            if (dup2(fd, STDIN_FILENO) < 0) {
-                perror("cshell: dup2");
-                close(fd);
-                exit(EXIT_FAILURE);
-            }
+//             if (dup2(fd, STDIN_FILENO) < 0) {
+//                 perror("cshell: dup2");
+//                 close(fd);
+//                 exit(EXIT_FAILURE);
+//             }
 
-            close(fd);
-        }
+//             close(fd);
+//         }
 
-        // output redirection > or >> 
-        if (command->output_file != NULL) {
+//         // output redirection > or >> 
+//         if (command->output_file != NULL) {
 
-            int flags = O_WRONLY | O_CREAT;
+//             int flags = O_WRONLY | O_CREAT;
 
-            if (command->append) {
-                flags |= O_APPEND;
-            }
-            else {
-                flags |= O_TRUNC;
-            }
+//             if (command->append) {
+//                 flags |= O_APPEND;
+//             }
+//             else {
+//                 flags |= O_TRUNC;
+//             }
 
-            int fd = open(
-                command->output_file,
-                flags,
-                0644
-            );
+//             int fd = open(
+//                 command->output_file,
+//                 flags,
+//                 0644
+//             );
 
-            if (fd < 0) {
-                perror("cshell");
-                exit(EXIT_FAILURE);
-            }
+//             if (fd < 0) {
+//                 perror("cshell");
+//                 exit(EXIT_FAILURE);
+//             }
 
-            if (dup2(fd, STDOUT_FILENO) < 0) {
-                perror("cshell: dup2");
-                close(fd);
-                exit(EXIT_FAILURE);
-            }
+//             if (dup2(fd, STDOUT_FILENO) < 0) {
+//                 perror("cshell: dup2");
+//                 close(fd);
+//                 exit(EXIT_FAILURE);
+//             }
 
-            close(fd);
-        }
+//             close(fd);
+//         }
 
-        execvp(command->args[0],command->args);
+//         execvp(command->args[0],command->args);
 
-        //execvp only lets program flow go forward if execution fails
-        fprintf(
-            stderr,
-            "cshell: command not found (%s)\n",
-            command->args[0]
-        );
+//         //execvp only lets program flow go forward if execution fails
+//         fprintf(
+//             stderr,
+//             "cshell: command not found (%s)\n",
+//             command->args[0]
+//         );
 
-        exit(EXIT_FAILURE);
-    }
+//         exit(EXIT_FAILURE);
+//     }
 
-    if (waitpid(pid, NULL, 0) < 0) {
-        perror("cshell: waitpid");
-        return 0;
-    }
+//     if (waitpid(pid, NULL, 0) < 0) {
+//         perror("cshell: waitpid");
+//         return 0;
+//     }
 
-    return 1;
-}
+//     return 1;
+// }
 
 int execute_pipe(Command *left, Command *right){
     int fd[2];
@@ -127,12 +127,29 @@ int execute_pipe(Command *left, Command *right){
 
         close(fd[0]);
         close(fd[1]);
+        for (int i = 0; i < left->red_count; i++) {
+            int rfd;
+
+            if (left->redirs[i].type == 0)rfd = open(left->redirs[i].file, O_RDONLY);
+            else if (left->redirs[i].type == 1)rfd = open(left->redirs[i].file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            else rfd = open(left->redirs[i].file, O_WRONLY | O_CREAT | O_APPEND, 0644);
+
+            if (rfd < 0) {
+                perror("cshell");
+                exit(EXIT_FAILURE);
+            }
+
+            if (left->redirs[i].type == 0)dup2(rfd, STDIN_FILENO);
+            else dup2(rfd, STDOUT_FILENO);
+
+            close(rfd);
+        }
 
         execvp(left->args[0], left->args);
 
         fprintf(
             stderr,
-            "cshell: command not found (%s)\n",
+            "cshell: %s: command not found\n",
             left->args[0]
         );
 
@@ -161,12 +178,29 @@ int execute_pipe(Command *left, Command *right){
 
         close(fd[0]);
         close(fd[1]);
+        for (int i = 0; i < right->red_count; i++) {
+            int rfd;
+
+            if (right->redirs[i].type == 0)rfd = open(right->redirs[i].file, O_RDONLY);
+            else if (right->redirs[i].type == 1)rfd = open(right->redirs[i].file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            else rfd = open(right->redirs[i].file, O_WRONLY | O_CREAT | O_APPEND, 0644);
+
+            if (rfd < 0) {
+                perror("cshell");
+                exit(EXIT_FAILURE);
+            }
+
+            if (right->redirs[i].type == 0)dup2(rfd, STDIN_FILENO);
+            else dup2(rfd, STDOUT_FILENO);
+
+            close(rfd);
+        }
 
         execvp(right->args[0], right->args);
 
         fprintf(
             stderr,
-            "cshell: command not found (%s)\n",
+            "cshell: %s: command not found\n",
             right->args[0]
         );
 
@@ -179,6 +213,91 @@ int execute_pipe(Command *left, Command *right){
 
     waitpid(left_pid, NULL, 0);
     waitpid(right_pid, NULL, 0);
+
+    return 1;
+}
+
+int execute_command(Command *command){
+    if (!command || !command->args || !command->args[0])
+        return 0;
+
+    pid_t pid = fork();
+
+    if (pid < 0) {
+        perror("cshell: fork");
+        return 0;
+    }
+
+    if (pid == 0) {
+        for (int i = 0; i < command->red_count; i++) {
+            int fd;
+
+            if (command->redirs[i].type == 0) {
+                fd = open(command->redirs[i].file, O_RDONLY);
+
+                if (fd < 0) {
+                    perror("cshell");
+                    exit(EXIT_FAILURE);
+                }
+
+                if (dup2(fd, STDIN_FILENO) < 0) {
+                    perror("cshell: dup2");
+                    close(fd);
+                    exit(EXIT_FAILURE);
+                }
+            }
+            else if (command->redirs[i].type == 1) {
+                fd = open(
+                    command->redirs[i].file,
+                    O_WRONLY | O_CREAT | O_TRUNC,
+                    0644
+                );
+
+                if (fd < 0) {
+                    perror("cshell");
+                    exit(EXIT_FAILURE);
+                }
+
+                if (dup2(fd, STDOUT_FILENO) < 0) {
+                    perror("cshell: dup2");
+                    close(fd);
+                    exit(EXIT_FAILURE);
+                }
+            }
+            else {
+                fd = open(
+                    command->redirs[i].file,
+                    O_WRONLY | O_CREAT | O_APPEND,
+                    0644
+                );
+
+                if (fd < 0) {
+                    perror("cshell");
+                    close(fd);
+                    exit(EXIT_FAILURE);
+                }
+
+                if (dup2(fd, STDOUT_FILENO) < 0) {
+                    perror("cshell: dup2");
+                    close(fd);
+                    exit(EXIT_FAILURE);
+                }
+            }
+
+            close(fd);
+        }
+
+        execvp(command->args[0], command->args);
+
+        fprintf(stderr,"cshell: %s: command not found\n",command->args[0]);
+
+        exit(EXIT_FAILURE);
+    }
+
+    if (waitpid(pid, NULL, 0) < 0) {
+        perror("cshell: waitpid");
+        return 0;
+    }
 
     return 1;
 }

@@ -248,6 +248,7 @@ static char *find_frecency_match(ShellState *shell,char *name){
 }
 
 int hop(ShellState *shell,char **args,int count){
+    // printf("DEBUG home = [%s]\n", shell->home);
     if(count==0){
         if(!ch_dir(shell,shell->home)){
             printf("hop: no such directory\n");
