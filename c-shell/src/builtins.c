@@ -1,3 +1,4 @@
+#define _XOPEN_SOURCE 700
 #include "builtins.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -700,6 +701,10 @@ int peek(char **args,int count){
 }
 
 int locate(char **args,int count){
+    if(count == 0){
+        printf("locate: invalid syntax\n");
+        return 0;
+    }
     char *path_env=getenv("PATH");
 
     for(int i=0;i<count;i++){

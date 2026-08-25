@@ -277,7 +277,27 @@ int main(){
                             command.argc - 1
                         );
                     }
+                    else if (strcmp(command.args[0], "reveal") == 0) {
+                        reveal(
+                            &shell,
+                            &command.args[1],
+                            command.argc - 1
+                        );
+                    }
 
+                    else if (strcmp(command.args[0], "peek") == 0) {
+                        peek(
+                            &command.args[1],
+                            command.argc - 1
+                        );
+                    }
+
+                    else if (strcmp(command.args[0], "locate") == 0) {
+                        locate(
+                            &command.args[1],
+                            command.argc - 1
+                        );
+                    }
                     else {
                         execute_command(&command);
                     }
