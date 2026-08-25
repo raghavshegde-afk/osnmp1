@@ -287,7 +287,25 @@ int execute_command(Command *command){
             close(fd);
         }
 
-        execvp(command->args[0], command->args);
+        // execvp(command->args[0], command->args);
+        char *command_name = command->args[0];
+
+        // if (command_name[0] == '%') {
+        //     command_name++;
+        // }
+
+        // execvp(command_name, command->args);
+
+        if (command_name[0] == '%') {
+            command_name++;
+            execvp(command_name, command->args);
+        }
+        else {
+            if (access(command_name, X_OK) == 0) {
+                execv(command_name, command->args);
+            }
+            execvp(command_name, command->args);
+        }
 
         fprintf(stderr,"cshell: %s: command not found\n",command->args[0]);
 
