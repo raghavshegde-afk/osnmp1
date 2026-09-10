@@ -195,6 +195,16 @@ int main(){
 
         //     free(command.redirs);
         // }
+            int semi_pos = -1;
+
+            for (int i = 0; i < count; i++) {
+                if (tokens[i].type == TOK_SEMI) {
+                    semi_pos = i;
+                    break;
+                }
+            
+            }
+
 
             int pipe_pos = -1;
 
@@ -204,8 +214,76 @@ int main(){
                     break;
                 }
             }
+            if (semi_pos!=-1){
+                // Command command;
+                // command.argc=0;
+                // command.redirs=NULL;
+                // command.red_count=0;
 
-            if (pipe_pos == -1) {
+                // char *args[semi_pos+1];
+
+                // for (int i=0;i<semi_pos;i++) {
+                //     if (tokens[i].type==TOK_WORD) {
+                //         args[command.argc++]=tokens[i].text;
+                //     }
+                // }
+
+                // args[command.argc]=NULL;
+                // command.args=args;
+
+                // if (command.argc>0)execute_command(&command);
+
+                // free(command.redirs);
+
+                // Command command2;
+                // command2.argc=0;
+                // command2.redirs=NULL;
+                // command2.red_count=0;
+
+                // char *args2[count-semi_pos];
+
+                // for (int i=semi_pos+1;i<count;i++) {
+                //     if (tokens[i].type==TOK_WORD)args2[command2.argc++]=tokens[i].text;
+                // }
+
+                // args2[command2.argc]=NULL;
+                // command2.args=args2;
+
+                // if (command2.argc>0)execute_command(&command2);
+
+                // free(command2.redirs);
+
+
+                int start=0;
+
+                while (start<count) {
+                    int end=start;
+
+                    while(end<count && tokens[end].type!=TOK_SEMI)end++;
+
+                    Command command;
+                    command.argc=0;
+                    command.redirs=NULL;
+                    command.red_count=0;
+
+                    char *args[end-start+1];
+
+                    for (int i=start;i<end;i++) {
+                        if (tokens[i].type==TOK_WORD)
+                            args[command.argc++]=tokens[i].text;
+                    }
+
+                    args[command.argc]=NULL;
+                    command.args=args;
+
+                    if (command.argc>0)execute_command(&command);
+
+                    free(command.redirs);
+
+                    start=end+1;
+                }
+            }
+            else if (pipe_pos==-1) {
                 Command command;
 
                 command.argc = 0;
