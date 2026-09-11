@@ -103,123 +103,95 @@
 //     return 1;
 // }
 
-int execute_pipe(Command *left, Command *right){
-    int fd[2];
+pid_t execute_pipeline(Command *commands, int count, int background, pid_t *out_pids){
+    if(count<2)return 0;
 
-    if (pipe(fd) < 0) {
-        perror("cshell: pipe");
-        return 0;
+    int pipes[count-1][2];
+    pid_t pids[count];
+    pid_t pgid=0;
+
+    for(int i=0;i<count-1;i++){
+        if(pipe(pipes[i])<0){
+            perror("cshell: pipe");
+            while(i-- > 0){
+                close(pipes[i][0]);
+                close(pipes[i][1]);
+            }
+            return 0;
+        }
     }
 
-    pid_t left_pid = fork();
+    for(int i=0;i<count;i++){
+        pids[i]=fork();
 
-    if (left_pid < 0) {
-        perror("cshell: fork");
-        close(fd[0]);
-        close(fd[1]);
-        return 0;
-    }
+        if(pids[i]<0){
+            perror("cshell: fork");
+            for(int j=0;j<count-1;j++){
+                close(pipes[j][0]);
+                close(pipes[j][1]);
+            }
+            while(i-- > 0)waitpid(pids[i],NULL,0);
+            return 0;
+        }
 
-    if (left_pid == 0) {
+        if(pids[i]==0){
+            setpgid(0,i==0 ? 0 : pgid);
 
-        
-        // Left command writes into the pipe.
-        
-        if (dup2(fd[1], STDOUT_FILENO) < 0) {
-            perror("cshell: dup2");
+            if(i>0 && dup2(pipes[i-1][0],STDIN_FILENO)<0){
+                perror("cshell: dup2");
+                exit(EXIT_FAILURE);
+            }
+            if(i<count-1 && dup2(pipes[i][1],STDOUT_FILENO)<0){
+                perror("cshell: dup2");
+                exit(EXIT_FAILURE);
+            }
+            for(int j=0;j<count-1;j++){
+                close(pipes[j][0]);
+                close(pipes[j][1]);
+            }
+
+            for(int j=0;j<commands[i].red_count;j++){
+                int fd;
+
+                if(commands[i].redirs[j].type==0)
+                    fd=open(commands[i].redirs[j].file,O_RDONLY);
+                else if(commands[i].redirs[j].type==1)
+                    fd=open(commands[i].redirs[j].file,O_WRONLY|O_CREAT|O_TRUNC,0644);
+                else
+                    fd=open(commands[i].redirs[j].file,O_WRONLY|O_CREAT|O_APPEND,0644);
+
+                if(fd<0){
+                    perror("cshell");
+                    exit(EXIT_FAILURE);
+                }
+                if(commands[i].redirs[j].type==0)dup2(fd,STDIN_FILENO);
+                else dup2(fd,STDOUT_FILENO);
+                close(fd);
+            }
+
+            execvp(commands[i].args[0],commands[i].args);
+            fprintf(stderr,"cshell: %s: command not found\n",commands[i].args[0]);
             exit(EXIT_FAILURE);
         }
 
-        close(fd[0]);
-        close(fd[1]);
-        for (int i = 0; i < left->red_count; i++) {
-            int rfd;
-
-            if (left->redirs[i].type == 0)rfd = open(left->redirs[i].file, O_RDONLY);
-            else if (left->redirs[i].type == 1)rfd = open(left->redirs[i].file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-            else rfd = open(left->redirs[i].file, O_WRONLY | O_CREAT | O_APPEND, 0644);
-
-            if (rfd < 0) {
-                perror("cshell");
-                exit(EXIT_FAILURE);
-            }
-
-            if (left->redirs[i].type == 0)dup2(rfd, STDIN_FILENO);
-            else dup2(rfd, STDOUT_FILENO);
-
-            close(rfd);
-        }
-
-        execvp(left->args[0], left->args);
-
-        fprintf(
-            stderr,
-            "cshell: %s: command not found\n",
-            left->args[0]
-        );
-
-        exit(EXIT_FAILURE);
+        if(i==0)pgid=pids[i];
+        setpgid(pids[i],pgid);
     }
 
-    pid_t right_pid = fork();
-
-    if (right_pid < 0) {
-        perror("cshell: fork");
-        close(fd[0]);
-        close(fd[1]);
-        waitpid(left_pid, NULL, 0);
-        return 0;
+    for(int i=0;i<count-1;i++){
+        close(pipes[i][0]);
+        close(pipes[i][1]);
     }
 
-    if (right_pid == 0) {
-
-        
-        // Right command reads from the pipe.
-        
-        if (dup2(fd[0], STDIN_FILENO) < 0) {
-            perror("cshell: dup2");
-            exit(EXIT_FAILURE);
-        }
-
-        close(fd[0]);
-        close(fd[1]);
-        for (int i = 0; i < right->red_count; i++) {
-            int rfd;
-
-            if (right->redirs[i].type == 0)rfd = open(right->redirs[i].file, O_RDONLY);
-            else if (right->redirs[i].type == 1)rfd = open(right->redirs[i].file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-            else rfd = open(right->redirs[i].file, O_WRONLY | O_CREAT | O_APPEND, 0644);
-
-            if (rfd < 0) {
-                perror("cshell");
-                exit(EXIT_FAILURE);
-            }
-
-            if (right->redirs[i].type == 0)dup2(rfd, STDIN_FILENO);
-            else dup2(rfd, STDOUT_FILENO);
-
-            close(rfd);
-        }
-
-        execvp(right->args[0], right->args);
-
-        fprintf(
-            stderr,
-            "cshell: %s: command not found\n",
-            right->args[0]
-        );
-
-        exit(EXIT_FAILURE);
+    if(out_pids){
+        for(int i=0;i<count;i++)out_pids[i]=pids[i];
     }
 
-    // Parent doesn't use the pipe.
-    close(fd[0]);
-    close(fd[1]);
+    if(!background){
+        for(int i=0;i<count;i++)waitpid(pids[i],NULL,0);
+    }
 
-    waitpid(left_pid, NULL, 0);
-    waitpid(right_pid, NULL, 0);
-
-    return 1;
+    return pids[0];
 }
 
 pid_t execute_command(Command *command){
@@ -234,6 +206,8 @@ pid_t execute_command(Command *command){
     }
 
     if (pid == 0) {
+        setpgid(0, 0);
+
         if (command->background) {
             int fd = open("/dev/null", O_RDONLY);
 
@@ -333,6 +307,8 @@ pid_t execute_command(Command *command){
 
         exit(EXIT_FAILURE);
     }
+    setpgid(pid, pid);
+
     // if(!command->background)foreground_pid=pid;
     if (!command->background) {
         pid_t result;

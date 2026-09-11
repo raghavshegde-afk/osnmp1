@@ -33,6 +33,6 @@ typedef struct {
 } Command;
 
 pid_t execute_command(Command *command);
-int execute_pipe(Command *left, Command *right);
+pid_t execute_pipeline(Command *commands, int count, int background, pid_t *out_pids);
 
 #endif

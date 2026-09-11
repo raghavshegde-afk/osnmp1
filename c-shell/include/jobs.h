@@ -3,17 +3,23 @@
 
 #include <sys/types.h>
 
+#define MAX_PIPELINE_PROCS 64
+
 typedef struct {
     int job_number;
-    pid_t pid;
-    char command_name[256];
+    pid_t pgid;
+    char job_name[256];
+    int process_count;
+    pid_t pids[MAX_PIPELINE_PROCS];
+    char command_names[MAX_PIPELINE_PROCS][256];
 } Job;
 
-// int add_job(pid_t pid);
 int add_job(pid_t pid,char *command_name);
+int add_job_group(pid_t pgid, pid_t *pids, char **names, int count);
 void remove_job(pid_t pid);
 void print_jobs();
 void record_child_exit(pid_t pid, int status);
 void reap_jobs();
+void print_activities();
 
 #endif

@@ -40,14 +40,19 @@ int main(){
     }
     char *line = NULL;
     size_t capacity = 0;
+    int prompt_redrawn_for_sigchld = 0;
 
     while (1) {//run till eof
-        if(child_exited){
+        int had_child_exit = child_exited;
+
+        if(had_child_exit){
             child_exited=0;
             reap_jobs();
         }
-        // print_prompt(&shell);
-        if(!child_exited)print_prompt(&shell);
+        if(!had_child_exit || !prompt_redrawn_for_sigchld){
+            print_prompt(&shell);
+            if(had_child_exit)prompt_redrawn_for_sigchld=1;
+        }
 
 
 
@@ -69,6 +74,8 @@ int main(){
             putchar('\n');
             break;
         }
+
+        prompt_redrawn_for_sigchld=0;
 
         int count = 0;
 
@@ -415,6 +422,9 @@ int main(){
                             command.argc - 1
                         );
                     }
+                    else if (strcmp(command.args[0], "activities") == 0) {
+                        print_activities();
+                    }
                     else {
                         pid_t pid=execute_command(&command);
                         if(command.background){
@@ -431,150 +441,72 @@ int main(){
             }
 
             else {
-                Command left;
-                Command right;
+                int pipeline_count=1;
+                int background=count>0 && tokens[count-1].type==TOK_AMP;
+                int token_end=background ? count-1 : count;
 
-                left.argc = 0;
-                left.redirs = NULL;
-                left.red_count = 0;
+                for(int i=0;i<token_end;i++){
+                    if(tokens[i].type==TOK_PIPE)pipeline_count++;
+                }
 
-                right.argc = 0;
-                right.redirs = NULL;
-                right.red_count = 0;
+                Command commands[pipeline_count];
+                char *args[pipeline_count][count+1];
+                int start=0;
+                int valid=1;
 
-                char *left_args[pipe_pos + 1];
-                char *right_args[count - pipe_pos];
+                for(int stage=0;stage<pipeline_count;stage++){
+                    int end=start;
+                    while(end<token_end && tokens[end].type!=TOK_PIPE)end++;
 
-                // for (int i = 0; i < pipe_pos; i++) {
+                    commands[stage].argc=0;
+                    commands[stage].redirs=NULL;
+                    commands[stage].red_count=0;
+                    commands[stage].background=background;
 
-                //     if (tokens[i].type == TOK_WORD) {
-                //         left_args[left.argc++] = tokens[i].text;
-                //     }
-                // }
+                    for(int i=start;i<end;i++){
+                        if(tokens[i].type==TOK_WORD){
+                            args[stage][commands[stage].argc++]=tokens[i].text;
+                        }
+                        else if(tokens[i].type==TOK_LT || tokens[i].type==TOK_GT || tokens[i].type==TOK_GTGT){
+                            if(i+1<end && tokens[i+1].type==TOK_WORD){
+                                Redir *r=realloc(commands[stage].redirs,(commands[stage].red_count+1)*sizeof(Redir));
 
-                // for (int i = pipe_pos + 1; i < count; i++) {
+                                if(r==NULL){
+                                    free(commands[stage].redirs);
+                                    commands[stage].redirs=NULL;
+                                    valid=0;
+                                    break;
+                                }
 
-                //     if (tokens[i].type == TOK_WORD) {
-                //         right_args[right.argc++] = tokens[i].text;
-                //     }
-                // }
-                for (int i = 0; i < pipe_pos; i++) {
-
-                    if (tokens[i].type == TOK_WORD) {
-                        left_args[left.argc++] = tokens[i].text;
-                    }
-                    
-                    else if (
-                        tokens[i].type == TOK_LT ||
-                        tokens[i].type == TOK_GT ||
-                        tokens[i].type == TOK_GTGT
-                    ) {
-
-                        if (
-                            i + 1 < pipe_pos &&
-                            tokens[i + 1].type == TOK_WORD
-                        ) {
-
-                            Redir *r = realloc(
-                                left.redirs,
-                                (left.red_count + 1) * sizeof(Redir)
-                            );
-
-                            if (r == NULL) {
-                                free(left.redirs);
-                                left.redirs = NULL;
-                                break;
+                                commands[stage].redirs=r;
+                                commands[stage].redirs[commands[stage].red_count].file=tokens[i+1].text;
+                                if(tokens[i].type==TOK_LT)commands[stage].redirs[commands[stage].red_count].type=0;
+                                else if(tokens[i].type==TOK_GT)commands[stage].redirs[commands[stage].red_count].type=1;
+                                else commands[stage].redirs[commands[stage].red_count].type=2;
+                                commands[stage].red_count++;
+                                i++;
                             }
-
-                            left.redirs = r;
-
-                            left.redirs[left.red_count].file =
-                                tokens[i + 1].text;
-
-                            if (tokens[i].type == TOK_LT) {
-                                left.redirs[left.red_count].type = 0;
-                            }
-
-                            else if (tokens[i].type == TOK_GT) {
-                                left.redirs[left.red_count].type = 1;
-                            }
-
-                            else {
-                                left.redirs[left.red_count].type = 2;
-                            }
-
-                            left.red_count++;
-                            i++;
                         }
                     }
+
+                    args[stage][commands[stage].argc]=NULL;
+                    commands[stage].args=args[stage];
+                    if(commands[stage].argc==0)valid=0;
+                    start=end+1;
                 }
 
-                for (int i = pipe_pos + 1; i < count; i++) {
-
-                    if (tokens[i].type == TOK_WORD) {
-                        right_args[right.argc++] = tokens[i].text;
-                    }
-
-                    else if (
-                        tokens[i].type == TOK_LT ||
-                        tokens[i].type == TOK_GT ||
-                        tokens[i].type == TOK_GTGT
-                    ) {
-
-                        if (
-                            i + 1 < count &&
-                            tokens[i + 1].type == TOK_WORD
-                        ) {
-
-                            Redir *r = realloc(
-                                right.redirs,
-                                (right.red_count + 1) * sizeof(Redir)
-                            );
-
-                            if (r == NULL) {
-                                free(right.redirs);
-                                right.redirs = NULL;
-                                break;
-                            }
-
-                            right.redirs = r;
-
-                            right.redirs[right.red_count].file =
-                                tokens[i + 1].text;
-
-                            if (tokens[i].type == TOK_LT) {
-                                right.redirs[right.red_count].type = 0;
-                            }
-
-                            else if (tokens[i].type == TOK_GT) {
-                                right.redirs[right.red_count].type = 1;
-                            }
-
-                            else {
-                                right.redirs[right.red_count].type = 2;
-                            }
-
-                            right.red_count++;
-                            i++;
-                        }
+                if(valid){
+                    pid_t out_pids[pipeline_count];
+                    pid_t pid=execute_pipeline(commands,pipeline_count,background,out_pids);
+                    if(background && pid>0){
+                        char *cmd_names[pipeline_count];
+                        for(int i=0;i<pipeline_count;i++)cmd_names[i]=commands[i].args[0];
+                        int jobn=add_job_group(pid,out_pids,cmd_names,pipeline_count);
+                        printf("[%d] %d\n",jobn,pid);
                     }
                 }
 
-                left_args[left.argc] = NULL;
-                right_args[right.argc] = NULL;
-
-                left.args = left_args;
-                right.args = right_args;
-
-                if (
-                    left.argc > 0 &&
-                    right.argc > 0
-                ) {
-                    execute_pipe(&left, &right);
-                }
-
-                free(left.redirs);
-                free(right.redirs);
+                for(int i=0;i<pipeline_count;i++)free(commands[i].redirs);
             }
         }
 
