@@ -5,8 +5,12 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/wait.h>
-
+#include <signal.h>
 #include <fcntl.h>
+
+
+
+// extern volatile sig_atomic_t foreground_pid;
 
 // int execute_command(Command *command){
 //     if (command == NULL ||
@@ -217,7 +221,7 @@ int execute_pipe(Command *left, Command *right){
     return 1;
 }
 
-int execute_command(Command *command){
+pid_t execute_command(Command *command){
     if (!command || !command->args || !command->args[0])
         return 0;
 
@@ -311,11 +315,14 @@ int execute_command(Command *command){
 
         exit(EXIT_FAILURE);
     }
-
-    if (waitpid(pid, NULL, 0) < 0) {
-        perror("cshell: waitpid");
-        return 0;
+    // if(!command->background)foreground_pid=pid;
+    if (!command->background) {
+        if (waitpid(pid,NULL,0)<0) {
+            perror("cshell: waitpid");
+            return 0;
+        }
+        // foreground_pid=0;
     }
 
-    return 1;
+    return pid;
 }

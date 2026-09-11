@@ -10,7 +10,8 @@ SRC = src/main.c \
       src/lexer.c \
       src/parser.c \
       src/execution.c \
-      src/builtins.c
+      src/builtins.c \
+      src/jobs.c
 
 OBJ = $(SRC:.c=.o)
 

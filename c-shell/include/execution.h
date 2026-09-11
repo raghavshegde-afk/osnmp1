@@ -1,5 +1,6 @@
 #ifndef EXECUTION_H
 #define EXECUTION_H
+#include <sys/types.h>
 
 // int execute_command(char **args);
 
@@ -28,9 +29,10 @@ typedef struct {
     int argc;
     Redir *redirs;
     int red_count;
+    int background;
 } Command;
 
-int execute_command(Command *command);
+pid_t execute_command(Command *command);
 int execute_pipe(Command *left, Command *right);
 
 #endif

@@ -5,9 +5,24 @@
 #include "execution.h"
 #include "parser.h"
 #include "builtins.h"
+#include "jobs.h"
+#include <signal.h>
+#include <sys/wait.h>
+#include <errno.h>
+
+static volatile sig_atomic_t child_exited=0;
+// volatile sig_atomic_t foreground_pid=0;
+
+void handle_sigchld(int sig){
+    (void)sig;
+    // while(waitpid(-1,NULL,WNOHANG)>0);
+    // child_exited=1;
+    child_exited=1;
+}
+
 
 int main(){
-
+    signal(SIGCHLD,handle_sigchld);
     ShellState shell;
     if (!shell_init(&shell)) {
         fprintf(stderr, "cshell:Failed to initialize shell state\n");
@@ -17,7 +32,16 @@ int main(){
     size_t capacity = 0;
 
     while (1) {//run till eof
-        print_prompt(&shell);
+        if(child_exited){
+            // pid_t pid;
+            // while((pid=waitpid(-1,NULL,WNOHANG))>0)remove_job(pid);
+            reap_jobs();
+            child_exited=0;
+        }
+        // print_prompt(&shell);
+        if(!child_exited)print_prompt(&shell);
+
+
 
         long long bytes_read = getline(
             &line,
@@ -29,7 +53,11 @@ int main(){
      * line -> points to the input
      * capacity -> tells getline() how much space is available
      */
-        if (bytes_read == -1) {
+        if(bytes_read==-1){
+            if(errno==EINTR){
+                clearerr(stdin);
+                continue;
+            }
             putchar('\n');
             break;
         }
@@ -204,7 +232,14 @@ int main(){
                 }
             
             }
+            int amp_pos=-1;
 
+            for (int i=0;i<count;i++) {
+                if (tokens[i].type==TOK_AMP) {
+                    amp_pos=i;
+                    break;
+                }
+            }
 
             int pipe_pos = -1;
 
@@ -265,6 +300,7 @@ int main(){
                     command.argc=0;
                     command.redirs=NULL;
                     command.red_count=0;
+                    command.background=0;
 
                     char *args[end-start+1];
 
@@ -289,6 +325,8 @@ int main(){
                 command.argc = 0;
                 command.redirs = NULL;
                 command.red_count = 0;
+                command.background=0;
+                if (amp_pos!=-1)command.background=1;
 
                 char *args[count + 1];
 
@@ -297,7 +335,9 @@ int main(){
                     if (tokens[i].type == TOK_WORD) {
                         args[command.argc++] = tokens[i].text;
                     }
-
+                    else if(tokens[i].type==TOK_AMP){
+                        command.background=1;
+                    }
                     else if (
                         tokens[i].type == TOK_LT ||
                         tokens[i].type == TOK_GT ||
@@ -377,7 +417,11 @@ int main(){
                         );
                     }
                     else {
-                        execute_command(&command);
+                        pid_t pid=execute_command(&command);
+                        if(command.background){
+                            int jobn = add_job(pid);
+                            printf("[%d] %d\n",jobn,pid);
+                        }
                     }
                 }
 
@@ -417,7 +461,7 @@ int main(){
                     if (tokens[i].type == TOK_WORD) {
                         left_args[left.argc++] = tokens[i].text;
                     }
-
+                    
                     else if (
                         tokens[i].type == TOK_LT ||
                         tokens[i].type == TOK_GT ||
@@ -548,4 +592,3 @@ int main(){
 
     return 0;
 }
-
