@@ -7,6 +7,7 @@
 #include <sys/wait.h>
 #include <signal.h>
 #include <fcntl.h>
+#include <errno.h>
 
 
 
@@ -233,6 +234,23 @@ pid_t execute_command(Command *command){
     }
 
     if (pid == 0) {
+        if (command->background) {
+            int fd = open("/dev/null", O_RDONLY);
+
+            if (fd < 0) {
+                perror("cshell");
+                exit(EXIT_FAILURE);
+            }
+
+            // dup2(fd, STDIN_FILENO);
+            // close(fd);
+            if (dup2(fd, STDIN_FILENO) < 0) {
+                perror("cshell: dup2");
+                close(fd);
+                exit(EXIT_FAILURE);
+            }
+            close(fd);
+        }
         for (int i = 0; i < command->red_count; i++) {
             int fd;
 
@@ -317,7 +335,13 @@ pid_t execute_command(Command *command){
     }
     // if(!command->background)foreground_pid=pid;
     if (!command->background) {
-        if (waitpid(pid,NULL,0)<0) {
+        pid_t result;
+
+        do {
+            result=waitpid(pid,NULL,0);
+        } while(result<0 && errno==EINTR);
+
+        if (result<0 && errno!=ECHILD) {
             perror("cshell: waitpid");
             return 0;
         }

@@ -15,14 +15,24 @@ static volatile sig_atomic_t child_exited=0;
 
 void handle_sigchld(int sig){
     (void)sig;
-    // while(waitpid(-1,NULL,WNOHANG)>0);
-    // child_exited=1;
+    int saved_errno=errno;
+    int status;
+    pid_t pid;
+
+    while((pid=waitpid(-1,&status,WNOHANG))>0){
+        record_child_exit(pid,status);
+    }
     child_exited=1;
+    errno=saved_errno;
 }
 
 
 int main(){
-    signal(SIGCHLD,handle_sigchld);
+    struct sigaction sa;
+    sa.sa_handler=handle_sigchld;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags=0;
+    sigaction(SIGCHLD,&sa,NULL);
     ShellState shell;
     if (!shell_init(&shell)) {
         fprintf(stderr, "cshell:Failed to initialize shell state\n");
@@ -33,10 +43,8 @@ int main(){
 
     while (1) {//run till eof
         if(child_exited){
-            // pid_t pid;
-            // while((pid=waitpid(-1,NULL,WNOHANG))>0)remove_job(pid);
-            reap_jobs();
             child_exited=0;
+            reap_jobs();
         }
         // print_prompt(&shell);
         if(!child_exited)print_prompt(&shell);
@@ -232,15 +240,6 @@ int main(){
                 }
             
             }
-            int amp_pos=-1;
-
-            for (int i=0;i<count;i++) {
-                if (tokens[i].type==TOK_AMP) {
-                    amp_pos=i;
-                    break;
-                }
-            }
-
             int pipe_pos = -1;
 
             for (int i = 0; i < count; i++) {
@@ -320,23 +319,23 @@ int main(){
                 }
             }
             else if (pipe_pos==-1) {
+                int start=0;
+                while(start<count){
+                    int end=start;
+                    while(end<count && tokens[end].type!=TOK_AMP)end++;
                 Command command;
 
                 command.argc = 0;
                 command.redirs = NULL;
                 command.red_count = 0;
-                command.background=0;
-                if (amp_pos!=-1)command.background=1;
+                command.background=(end<count && tokens[end].type==TOK_AMP);
 
-                char *args[count + 1];
+                char *args[end-start+1];
 
-                for (int i = 0; i < count; i++) {
+                for (int i = start; i < end; i++) {
 
                     if (tokens[i].type == TOK_WORD) {
                         args[command.argc++] = tokens[i].text;
-                    }
-                    else if(tokens[i].type==TOK_AMP){
-                        command.background=1;
                     }
                     else if (
                         tokens[i].type == TOK_LT ||
@@ -345,7 +344,7 @@ int main(){
                     ) {
 
                         if (
-                            i + 1 < count &&
+                            i+1<end &&
                             tokens[i + 1].type == TOK_WORD
                         ) {
 
@@ -419,13 +418,16 @@ int main(){
                     else {
                         pid_t pid=execute_command(&command);
                         if(command.background){
-                            int jobn = add_job(pid);
+                            // int jobn = add_job(pid);
+                            int jobn = add_job(pid,command.args[0]);
                             printf("[%d] %d\n",jobn,pid);
                         }
                     }
                 }
 
                 free(command.redirs);
+                start=end+1;
+                }
             }
 
             else {
