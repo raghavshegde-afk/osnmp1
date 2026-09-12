@@ -9,6 +9,12 @@
 #include <sys/stat.h>   // struct stat, stat, S_ISDIR info about filesystem and path
 #include <time.h>
 #include <math.h>
+#include <sys/utsname.h>
+#include <sys/ptrace.h>
+#include <sys/wait.h>
+#include <sys/user.h>
+#include <errno.h>
+#include "syscalls.h"
 
 static int peek_reverse(char *filename,int number);
 
@@ -764,4 +770,460 @@ int locate(char **args,int count){
     }
 
     return 1;
+}
+static void print_spy_row(const char *pid_str, const char *fd, const char *path) {
+    struct stat st;
+    const char *type_str = "UNKNOWN";
+    
+    if (stat(path, &st) == 0) {
+        switch (st.st_mode & S_IFMT) {
+            case S_IFREG: type_str = "REG"; break;
+            case S_IFDIR: type_str = "DIR"; break;
+            case S_IFCHR: type_str = "CHR"; break;
+            case S_IFBLK: type_str = "BLK"; break;
+            case S_IFIFO: type_str = "FIFO"; break;
+            case S_IFSOCK: type_str = "SOCK"; break;
+        }
+    }
+    printf("%-10s %-10s %-10s %s\n", pid_str, fd, type_str, path);
+}
+
+static void print_spy_row_from_link(const char *pid_str, const char *fd, const char *link_path) {
+    char target_path[4096];
+    ssize_t len = readlink(link_path, target_path, sizeof(target_path) - 1);
+    if (len != -1) {
+        target_path[len] = '\0';
+        print_spy_row(pid_str, fd, target_path);
+    }
+}
+
+int spy(char **args, int count) {
+    if (count > 1) {
+        printf("spy: invalid syntax\n");
+        return 1;
+    }
+
+    pid_t target_pid;
+    if (count == 0) {
+        target_pid = getpid();
+    } else {
+        target_pid = atoi(args[0]);
+    }
+
+    char proc_dir[256];
+    snprintf(proc_dir, sizeof(proc_dir), "/proc/%d", target_pid);
+
+    struct stat st;
+    if (stat(proc_dir, &st) != 0) {
+        printf("spy: no such process\n");
+        return 1;
+    }
+
+    char pid_str[32];
+    snprintf(pid_str, sizeof(pid_str), "%d", target_pid);
+
+    printf("%-10s %-10s %-10s %s\n", "PID", "FD", "TYPE", "PATH");
+
+    // 1. cwd
+    char link_path[1024];
+    snprintf(link_path, sizeof(link_path), "%s/cwd", proc_dir);
+    print_spy_row_from_link(pid_str, "cwd", link_path);
+
+    // 2. txt (exe)
+    snprintf(link_path, sizeof(link_path), "%s/exe", proc_dir);
+    print_spy_row_from_link(pid_str, "txt", link_path);
+
+    // 3. mem (mapped files)
+    char maps_path[512];
+    snprintf(maps_path, sizeof(maps_path), "%s/maps", proc_dir);
+    FILE *maps_file = fopen(maps_path, "r");
+    if (maps_file) {
+        char *line = NULL;
+        size_t len = 0;
+        char *printed_paths[1024];
+        int printed_count = 0;
+
+        while (getline(&line, &len, maps_file) != -1) {
+            char path[4096] = {0};
+            // format: address perms offset dev inode pathname
+            // pathname might be empty
+            if (sscanf(line, "%*s %*s %*s %*s %*s %4095[^\n]", path) == 1) {
+                if (path[0] == '\0' || path[0] == '[') {
+                    continue; // Skip anonymous and special mappings like [heap], [stack], [vdso]
+                }
+                
+                // Check if already printed
+                int already_printed = 0;
+                for (int i = 0; i < printed_count; i++) {
+                    if (strcmp(printed_paths[i], path) == 0) {
+                        already_printed = 1;
+                        break;
+                    }
+                }
+                
+                if (!already_printed) {
+                    if (printed_count < 1024) {
+                        printed_paths[printed_count++] = strdup(path);
+                    }
+                    print_spy_row(pid_str, "mem", path);
+                }
+            }
+        }
+        free(line);
+        fclose(maps_file);
+        
+        for (int i = 0; i < printed_count; i++) {
+            free(printed_paths[i]);
+        }
+    }
+
+    // 4. numeric fds
+    char fd_dir_path[512];
+    snprintf(fd_dir_path, sizeof(fd_dir_path), "%s/fd", proc_dir);
+    DIR *dir = opendir(fd_dir_path);
+    if (dir) {
+        struct dirent *ent;
+        while ((ent = readdir(dir)) != NULL) {
+            if (ent->d_name[0] >= '0' && ent->d_name[0] <= '9') {
+                snprintf(link_path, sizeof(link_path), "%s/%s", fd_dir_path, ent->d_name);
+                print_spy_row_from_link(pid_str, ent->d_name, link_path);
+            }
+        }
+        closedir(dir);
+    }
+
+    return 0;
+}
+
+static int command_exists(const char *cmd) {
+    if (strchr(cmd, '/')) {
+        return access(cmd, X_OK) == 0;
+    }
+    char *path_env = getenv("PATH");
+    if (!path_env) return 0;
+    
+    char *path = strdup(path_env);
+    if (!path) return 0;
+    
+    char *dir = strtok(path, ":");
+    char full_path[1024];
+    
+    while (dir) {
+        snprintf(full_path, sizeof(full_path), "%s/%s", dir, cmd);
+        if (access(full_path, X_OK) == 0) {
+            free(path);
+            return 1;
+        }
+        dir = strtok(NULL, ":");
+    }
+    free(path);
+    return 0;
+}
+
+struct syscall_entry {
+    long scno;
+    long count;
+    const char *name;
+    char dyn_name[32];
+};
+
+static int snoop_cmp(const void *a, const void *b) {
+    const struct syscall_entry *ea = (const struct syscall_entry *)a;
+    const struct syscall_entry *eb = (const struct syscall_entry *)b;
+    if (ea->count != eb->count) {
+        return (ea->count < eb->count) ? 1 : -1; // Descending by count
+    }
+    return (ea->scno > eb->scno) ? 1 : (ea->scno < eb->scno ? -1 : 0); // Ascending by scno
+}
+
+static volatile sig_atomic_t snoop_interrupted = 0;
+static void snoop_sigint_handler(int sig) {
+    (void)sig;
+    snoop_interrupted = 1;
+}
+
+int snoop(char **args, int count) {
+    if (count == 0) {
+        printf("snoop: invalid syntax\n");
+        return 1;
+    }
+
+    struct utsname buffer;
+    if (uname(&buffer) != 0 || strcmp(buffer.machine, "x86_64") != 0) {
+        printf("snoop: unsupported architecture\n");
+        return 1;
+    }
+
+    int attach_mode = 0;
+    pid_t target_pid = -1;
+
+    if (strcmp(args[0], "-p") == 0) {
+        if (count != 2) {
+            printf("snoop: invalid syntax\n");
+            return 1;
+        }
+        char *endptr;
+        long pid_val = strtol(args[1], &endptr, 10);
+        if (*endptr != '\0' || pid_val <= 0) {
+            printf("snoop: invalid syntax\n");
+            return 1;
+        }
+        target_pid = (pid_t)pid_val;
+        attach_mode = 1;
+
+        if (kill(target_pid, 0) == -1) {
+            printf("snoop: no such process\n");
+            return 1;
+        }
+    } else {
+        if (!command_exists(args[0])) {
+            printf("snoop: command not found\n");
+            return 1;
+        }
+    }
+
+    pid_t trace_pid = -1;
+
+    if (attach_mode) {
+        if (ptrace(PTRACE_ATTACH, target_pid, NULL, NULL) == -1) {
+            perror("snoop: ptrace attach");
+            return 1;
+        }
+        trace_pid = target_pid;
+        int status;
+        int ret;
+        do {
+            ret = waitpid(trace_pid, &status, 0);
+        } while (ret == -1 && errno == EINTR);
+        if (ret == -1) {
+            perror("snoop: waitpid");
+            if (ptrace(PTRACE_DETACH, trace_pid, NULL, NULL) == -1) {
+                if (errno != ESRCH) perror("snoop: ptrace detach");
+            }
+            return 1;
+        }
+        if (!WIFSTOPPED(status)) {
+            printf("snoop: process terminated before tracing\n");
+            return 1;
+        }
+    } else {
+        pid_t pid = fork();
+        if (pid == -1) {
+            perror("snoop: fork");
+            return 1;
+        }
+        if (pid == 0) {
+            if (ptrace(PTRACE_TRACEME, 0, NULL, NULL) == -1) {
+                perror("snoop: ptrace");
+                exit(1);
+            }
+            execvp(args[0], args);
+            perror("snoop: execvp");
+            exit(1);
+        }
+        trace_pid = pid;
+        int status;
+        int ret;
+        do {
+            ret = waitpid(trace_pid, &status, 0);
+        } while (ret == -1 && errno == EINTR);
+        if (ret == -1) {
+            perror("snoop: waitpid");
+            kill(trace_pid, SIGKILL);
+            waitpid(trace_pid, &status, 0);
+            return 1;
+        }
+        if (!WIFSTOPPED(status)) {
+            return 1;
+        }
+    }
+
+    if (ptrace(PTRACE_SETOPTIONS, trace_pid, 0, PTRACE_O_TRACESYSGOOD) == -1) {
+        perror("snoop: ptrace setoptions");
+        if (attach_mode) {
+            if (ptrace(PTRACE_DETACH, trace_pid, NULL, NULL) == -1) {
+                if (errno != ESRCH) perror("snoop: ptrace detach");
+            }
+        } else {
+            kill(trace_pid, SIGKILL);
+            int st; waitpid(trace_pid, &st, 0);
+        }
+        return 1;
+    }
+
+    long counts[MAX_SYSCALL] = {0};
+    long unknown_counts[1024] = {0};
+    long unknown_scnos[1024] = {0};
+    int num_unknown = 0;
+    int in_syscall = 0;
+    long current_syscall = -1;
+
+    struct sigaction old_sa, new_sa;
+    int sigaction_ok = 0;
+    snoop_interrupted = 0;
+    new_sa.sa_handler = snoop_sigint_handler;
+    sigemptyset(&new_sa.sa_mask);
+    new_sa.sa_flags = 0;
+    if (sigaction(SIGINT, &new_sa, &old_sa) == 0) {
+        sigaction_ok = 1;
+    } else {
+        perror("snoop: sigaction");
+    }
+
+    if (attach_mode) {
+        printf("snoop: tracing PID %d (press Ctrl-C to stop)\n", trace_pid);
+    } else {
+        printf("snoop: tracing command %s (press Ctrl-C to stop)\n", args[0]);
+    }
+
+    int sig_to_forward = 0;
+    
+    struct timespec start_time, end_time;
+    if (clock_gettime(CLOCK_MONOTONIC, &start_time) == -1) {
+        perror("snoop: clock_gettime");
+        start_time.tv_sec = 0;
+        start_time.tv_nsec = 0;
+    }
+
+    while (!snoop_interrupted) {
+        if (ptrace(PTRACE_SYSCALL, trace_pid, NULL, sig_to_forward) == -1) {
+            if (errno != ESRCH) perror("snoop: ptrace syscall");
+            break;
+        }
+        sig_to_forward = 0;
+
+        int status;
+        int ret;
+        do {
+            ret = waitpid(trace_pid, &status, 0);
+        } while (ret == -1 && errno == EINTR && !snoop_interrupted);
+
+        if (ret == -1) {
+            if (errno == EINTR && snoop_interrupted) {
+                break;
+            }
+            perror("snoop: waitpid");
+            break;
+        }
+
+        if (WIFEXITED(status) || WIFSIGNALED(status)) {
+            break;
+        }
+
+        if (WIFSTOPPED(status)) {
+            int sig = WSTOPSIG(status);
+            if (sig == (SIGTRAP | 0x80)) {
+                if (!in_syscall) {
+                    struct user_regs_struct regs;
+                    if (ptrace(PTRACE_GETREGS, trace_pid, NULL, &regs) == -1) {
+                        if (errno != ESRCH) perror("snoop: ptrace getregs");
+                        break;
+                    }
+                    current_syscall = regs.orig_rax;
+                    in_syscall = 1;
+                } else {
+                    in_syscall = 0;
+                    if (current_syscall >= 0 && current_syscall < MAX_SYSCALL) {
+                        counts[current_syscall]++;
+                    } else if (current_syscall != -1) {
+                        int found = 0;
+                        for (int i = 0; i < num_unknown; i++) {
+                            if (unknown_scnos[i] == current_syscall) {
+                                unknown_counts[i]++; found = 1; break;
+                            }
+                        }
+                        if (!found && num_unknown < 1024) {
+                            unknown_scnos[num_unknown] = current_syscall;
+                            unknown_counts[num_unknown++] = 1;
+                        }
+                    }
+                    current_syscall = -1;
+                }
+            } else if (sig == SIGTRAP) {
+                // Ignore ordinary SIGTRAP from execve or breakpoint
+            } else {
+                sig_to_forward = sig;
+            }
+        }
+    }
+
+    if (clock_gettime(CLOCK_MONOTONIC, &end_time) == -1) {
+        perror("snoop: clock_gettime");
+        end_time = start_time;
+    }
+
+    if (sigaction_ok) {
+        if (sigaction(SIGINT, &old_sa, NULL) == -1) {
+            perror("snoop: sigaction restore");
+        }
+    }
+
+    if (attach_mode) {
+        // Traces until process naturally exits or Ctrl-C interrupts loop.
+        if (kill(trace_pid, 0) == 0) {
+            if (ptrace(PTRACE_DETACH, trace_pid, NULL, NULL) == -1) {
+                if (errno != ESRCH) perror("snoop: ptrace detach");
+            } else {
+                if (snoop_interrupted) printf("\nsnoop: detached from PID %d\n", trace_pid);
+            }
+        }
+    } else {
+        // Unconditionally terminate and reap a command-mode child if it's still alive on exit.
+        if (kill(trace_pid, 0) == 0) {
+            kill(trace_pid, SIGKILL);
+            int st; waitpid(trace_pid, &st, 0);
+        }
+    }
+
+    int total_unique = 0;
+    for (int i = 0; i < MAX_SYSCALL; i++) {
+        if (counts[i] > 0) total_unique++;
+    }
+    total_unique += num_unknown;
+
+    struct syscall_entry *entries = NULL;
+    if (total_unique > 0) {
+        entries = malloc(total_unique * sizeof(struct syscall_entry));
+        if (!entries) {
+            perror("snoop: malloc");
+            return 1;
+        }
+
+        int idx = 0;
+        for (int i = 0; i < MAX_SYSCALL; i++) {
+            if (counts[i] > 0) {
+                entries[idx].scno = i;
+                entries[idx].count = counts[i];
+                if (syscall_names[i] != NULL) {
+                    entries[idx].name = syscall_names[i];
+                } else {
+                    snprintf(entries[idx].dyn_name, sizeof(entries[idx].dyn_name), "syscall_%d", i);
+                    entries[idx].name = entries[idx].dyn_name;
+                }
+                idx++;
+            }
+        }
+        for (int i = 0; i < num_unknown; i++) {
+            entries[idx].scno = unknown_scnos[i];
+            entries[idx].count = unknown_counts[i];
+            snprintf(entries[idx].dyn_name, sizeof(entries[idx].dyn_name), "syscall_%ld", unknown_scnos[i]);
+            entries[idx].name = entries[idx].dyn_name;
+            idx++;
+        }
+
+        qsort(entries, total_unique, sizeof(struct syscall_entry), snoop_cmp);
+    }
+
+    printf("%-20s %s\n", "SYSCALL", "COUNT");
+    printf("--------------------------------\n");
+    for (int i = 0; i < total_unique; i++) {
+        printf("%-20s %ld\n", entries[i].name, entries[i].count);
+    }
+    if (entries) free(entries);
+
+    double elapsed_s = (end_time.tv_sec - start_time.tv_sec) + 
+                       (end_time.tv_nsec - start_time.tv_nsec) / 1e9;
+    printf("\nTotal elapsed time: %.6f seconds\n", elapsed_s);
+
+    return 0;
 }

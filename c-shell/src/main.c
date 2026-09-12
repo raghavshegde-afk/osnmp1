@@ -449,6 +449,12 @@ read_again:
                             command.argc - 1
                         );
                     }
+                    else if (strcmp(command.args[0], "spy") == 0) {
+                        spy(&command.args[1], command.argc - 1);
+                    }
+                    else if (strcmp(command.args[0], "snoop") == 0) {
+                        snoop(&command.args[1], command.argc - 1);
+                    }
                     else if (strcmp(command.args[0], "activities") == 0) {
                         print_activities();
                     }

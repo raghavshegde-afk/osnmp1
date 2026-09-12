@@ -15,6 +15,8 @@ SRC = src/main.c \
 
 OBJ = $(SRC:.c=.o)
 
+all: $(TARGET)
+
 $(TARGET): $(OBJ)
 	$(CC) $(CFLAGS) -o $(TARGET) $(OBJ) $(LDLIBS)
 
@@ -24,4 +26,4 @@ src/%.o: src/%.c
 clean:
 	rm -f $(OBJ) $(TARGET)
 
-.PHONY: clean
+.PHONY: all clean

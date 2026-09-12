@@ -7,5 +7,7 @@ int hop(ShellState *shell,char **args,int count);
 int reveal(ShellState *shell,char **args,int count);
 int peek(char **args,int count);
 int locate(char **args,int count);
+int spy(char **args,int count);
+int snoop(char **args,int count);
 
 #endif
