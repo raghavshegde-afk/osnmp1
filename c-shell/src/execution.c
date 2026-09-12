@@ -8,6 +8,7 @@
 #include <signal.h>
 #include <fcntl.h>
 #include <errno.h>
+#include "jobs.h"
 
 
 
@@ -136,6 +137,8 @@ pid_t execute_pipeline(Command *commands, int count, int background, pid_t *out_
 
         if(pids[i]==0){
             setpgid(0,i==0 ? 0 : pgid);
+            signal(SIGINT,SIG_DFL);
+            signal(SIGTSTP,SIG_DFL);
 
             if(i>0 && dup2(pipes[i-1][0],STDIN_FILENO)<0){
                 perror("cshell: dup2");
@@ -188,7 +191,20 @@ pid_t execute_pipeline(Command *commands, int count, int background, pid_t *out_
     }
 
     if(!background){
-        for(int i=0;i<count;i++)waitpid(pids[i],NULL,0);
+        tcsetpgrp(STDIN_FILENO,pgid);
+        int stopped=0;
+        for(int i=0;i<count;i++){
+            int status;
+            waitpid(pids[i],&status,WUNTRACED);
+            if(WIFSTOPPED(status))stopped=1;
+        }
+        tcsetpgrp(STDIN_FILENO,getpgrp());
+        if(stopped){
+            char *cmd_names[count];
+            for(int i=0;i<count;i++)cmd_names[i]=commands[i].args[0];
+            int jobn=add_job_group(pgid,pids,cmd_names,count);
+            printf("[%d] + Stopped    %s\n",jobn,commands[0].args[0]);
+        }
     }
 
     return pids[0];
@@ -207,6 +223,8 @@ pid_t execute_command(Command *command){
 
     if (pid == 0) {
         setpgid(0, 0);
+        signal(SIGINT,SIG_DFL);
+        signal(SIGTSTP,SIG_DFL);
 
         if (command->background) {
             int fd = open("/dev/null", O_RDONLY);
@@ -311,15 +329,23 @@ pid_t execute_command(Command *command){
 
     // if(!command->background)foreground_pid=pid;
     if (!command->background) {
+        tcsetpgrp(STDIN_FILENO,pid);
+        int status;
         pid_t result;
 
         do {
-            result=waitpid(pid,NULL,0);
+            result=waitpid(pid,&status,WUNTRACED);
         } while(result<0 && errno==EINTR);
 
         if (result<0 && errno!=ECHILD) {
             perror("cshell: waitpid");
+            tcsetpgrp(STDIN_FILENO,getpgrp());
             return 0;
+        }
+        tcsetpgrp(STDIN_FILENO,getpgrp());
+        if(result>0 && WIFSTOPPED(status)){
+            int jobn=add_job(pid,command->args[0]);
+            printf("[%d] + Stopped    %s\n",jobn,command->args[0]);
         }
         // foreground_pid=0;
     }

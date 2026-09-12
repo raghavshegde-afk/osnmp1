@@ -4,6 +4,7 @@
 #include <string.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <errno.h>
 #define MAX_JOBS 64
 #define MAX_JOB_EVENTS 128
 
@@ -139,4 +140,61 @@ void print_activities(void){
             printf("%d %s %s\n",pid,jobs[i].command_names[p],state_str);
         }
     }
+}
+
+int has_stopped_jobs(void){
+    for(int i=0;i<job_count;i++){
+        for(int p=0;p<jobs[i].process_count;p++){
+            pid_t pid=jobs[i].pids[p];
+            if(kill(pid,0)<0)continue;
+
+            char path[64];
+            snprintf(path,sizeof(path),"/proc/%d/stat",pid);
+            FILE *f=fopen(path,"r");
+            if(f){
+                char buf[512];
+                if(fgets(buf,sizeof(buf),f)){
+                    char *paren=strrchr(buf,')');
+                    if(paren && *(paren+1)==' '){
+                        char state=*(paren+2);
+                        if(state=='T' || state=='t'){
+                            fclose(f);
+                            return 1;
+                        }
+                    }
+                }
+                fclose(f);
+            }
+        }
+    }
+    return 0;
+}
+
+void kill_all_jobs(void){
+    for(int i=0;i<job_count;i++){
+        if(jobs[i].pgid>0){
+            kill(-jobs[i].pgid,SIGHUP);
+        }
+    }
+}
+
+
+Job *get_job_by_number(int job_number) {
+    for (int i = 0; i < job_count; i++) {
+        if (jobs[i].job_number == job_number) {
+            return &jobs[i];
+        }
+    }
+    return NULL;
+}
+
+int is_tracked_pid(pid_t pid) {
+    for (int i = 0; i < job_count; i++) {
+        for (int p = 0; p < jobs[i].process_count; p++) {
+            if (jobs[i].pids[p] == pid) {
+                return 1;
+            }
+        }
+    }
+    return 0;
 }

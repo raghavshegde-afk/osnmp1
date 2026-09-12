@@ -21,5 +21,9 @@ void print_jobs();
 void record_child_exit(pid_t pid, int status);
 void reap_jobs();
 void print_activities();
+int has_stopped_jobs(void);
+void kill_all_jobs(void);
+Job *get_job_by_number(int job_number);
+int is_tracked_pid(pid_t pid);
 
 #endif

@@ -9,6 +9,7 @@
 #include <signal.h>
 #include <sys/wait.h>
 #include <errno.h>
+#include <unistd.h>
 
 static volatile sig_atomic_t child_exited=0;
 // volatile sig_atomic_t foreground_pid=0;
@@ -18,11 +19,13 @@ void handle_sigchld(int sig){
     int saved_errno=errno;
     int status;
     pid_t pid;
+    int reaped = 0;
 
     while((pid=waitpid(-1,&status,WNOHANG))>0){
         record_child_exit(pid,status);
+        reaped = 1;
     }
-    child_exited=1;
+    if (reaped) child_exited=1;
     errno=saved_errno;
 }
 
@@ -33,6 +36,14 @@ int main(){
     sigemptyset(&sa.sa_mask);
     sa.sa_flags=0;
     sigaction(SIGCHLD,&sa,NULL);
+
+    signal(SIGINT,SIG_IGN);
+    signal(SIGTSTP,SIG_IGN);
+    signal(SIGTTOU,SIG_IGN);
+
+    setpgid(0,0);
+    tcsetpgrp(STDIN_FILENO,getpgrp());
+
     ShellState shell;
     if (!shell_init(&shell)) {
         fprintf(stderr, "cshell:Failed to initialize shell state\n");
@@ -41,6 +52,7 @@ int main(){
     char *line = NULL;
     size_t capacity = 0;
     int prompt_redrawn_for_sigchld = 0;
+    int eof_warned = 0;
 
     while (1) {//run till eof
         int had_child_exit = child_exited;
@@ -56,6 +68,7 @@ int main(){
 
 
 
+read_again:
         long long bytes_read = getline(
             &line,
             &capacity,
@@ -69,10 +82,24 @@ int main(){
         if(bytes_read==-1){
             if(errno==EINTR){
                 clearerr(stdin);
+                if (!child_exited) goto read_again;
                 continue;
+            }
+            if(has_stopped_jobs()){
+                if(!eof_warned){
+                    eof_warned=1;
+                    printf("cshell: there are stopped jobs\n");
+                    clearerr(stdin);
+                    continue;
+                }
             }
             putchar('\n');
             break;
+        }
+
+        eof_warned=0;
+        if(feof(stdin)){
+            clearerr(stdin);
         }
 
         prompt_redrawn_for_sigchld=0;
@@ -425,6 +452,111 @@ int main(){
                     else if (strcmp(command.args[0], "activities") == 0) {
                         print_activities();
                     }
+                    else if (strcmp(command.args[0], "fg") == 0) {
+                        if (command.argc != 2) {
+                            fprintf(stderr, "cshell: fg: invalid number of arguments\n");
+                        } else {
+                            int job_number = atoi(command.args[1]);
+                            Job *job = get_job_by_number(job_number);
+                            if (!job) {
+                                fprintf(stderr, "cshell: fg: %d: no such job\n", job_number);
+                            } else {
+                                pid_t pgid = job->pgid;
+                                int p_count = job->process_count;
+                                pid_t pids[MAX_PIPELINE_PROCS];
+                                char cmd_names[MAX_PIPELINE_PROCS][256];
+                                char first_cmd_name[256];
+                                strcpy(first_cmd_name, job->job_name);
+                                for (int i = 0; i < p_count; i++) {
+                                    pids[i] = job->pids[i];
+                                    strcpy(cmd_names[i], job->command_names[i]);
+                                }
+                                
+                                remove_job(pgid);
+                                tcsetpgrp(STDIN_FILENO, pgid);
+                                kill(-pgid, SIGCONT);
+                                
+                                int stopped = 0;
+                                for (int i = 0; i < p_count; i++) {
+                                    int status;
+                                    pid_t result;
+                                    do {
+                                        result = waitpid(pids[i], &status, WUNTRACED);
+                                    } while (result < 0 && errno == EINTR);
+                                    if (result > 0 && WIFSTOPPED(status)) stopped = 1;
+                                }
+                                
+                                tcsetpgrp(STDIN_FILENO, getpgrp());
+                                
+                                if (stopped) {
+                                    int jobn;
+                                    if (p_count == 1) {
+                                        jobn = add_job(pgid, first_cmd_name);
+                                    } else {
+                                        char *name_ptrs[MAX_PIPELINE_PROCS];
+                                        for (int i = 0; i < p_count; i++) name_ptrs[i] = cmd_names[i];
+                                        jobn = add_job_group(pgid, pids, name_ptrs, p_count);
+                                    }
+                                    printf("[%d] + Stopped    %s\n", jobn, first_cmd_name);
+                                }
+                            }
+                        }
+                    }
+                    else if (strcmp(command.args[0], "bg") == 0) {
+                        if (command.argc != 2) {
+                            fprintf(stderr, "cshell: bg: invalid number of arguments\n");
+                        } else {
+                            int job_number = atoi(command.args[1]);
+                            Job *job = get_job_by_number(job_number);
+                            if (!job) {
+                                fprintf(stderr, "cshell: bg: %d: no such job\n", job_number);
+                            } else {
+                                kill(-job->pgid, SIGCONT);
+                            }
+                        }
+                    }
+                    else if (strcmp(command.args[0], "ping") == 0) {
+                        int is_valid_signal = 1;
+                        if (command.argc != 3) {
+                            is_valid_signal = 0;
+                        } else {
+                            char *sig_str = command.args[2];
+                            if (sig_str[0] == '\0') is_valid_signal = 0;
+                            for (int i = 0; sig_str[i] != '\0'; i++) {
+                                if (sig_str[i] < '0' || sig_str[i] > '9') {
+                                    is_valid_signal = 0;
+                                    break;
+                                }
+                            }
+                        }
+
+                        if (!is_valid_signal) {
+                            printf("ping: invalid syntax\n");
+                        } else {
+                            int sig_num = atoi(command.args[2]);
+                            int actual_sig = sig_num % 64;
+                            char *target = command.args[1];
+                            
+                            if (target[0] == '%') {
+                                int job_num = atoi(target + 1);
+                                Job *job = get_job_by_number(job_num);
+                                if (!job) {
+                                    printf("ping: no such process found\n");
+                                } else {
+                                    kill(-job->pgid, actual_sig);
+                                    printf("Sent signal %d to %s\n", sig_num, target);
+                                }
+                            } else {
+                                pid_t pid = atoi(target);
+                                if (!is_tracked_pid(pid)) {
+                                    printf("ping: no such process found\n");
+                                } else {
+                                    kill(pid, actual_sig);
+                                    printf("Sent signal %d to %s\n", sig_num, target);
+                                }
+                            }
+                        }
+                    }
                     else {
                         pid_t pid=execute_command(&command);
                         if(command.background){
@@ -521,6 +653,7 @@ int main(){
         
     }
 
+    kill_all_jobs();
     free(line);// free memory allocated by getline
     shell_kill(&shell);
 
