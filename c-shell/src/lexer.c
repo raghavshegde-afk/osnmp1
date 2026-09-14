@@ -316,6 +316,7 @@ Token *lex_line(const char *line, int *count)
 
         if (error) {
             free(tokens);
+            *count = -1;
             return NULL;
         }
 

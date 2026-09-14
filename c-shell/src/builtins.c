@@ -16,7 +16,7 @@
 #include <errno.h>
 #include "syscalls.h"
 
-static int peek_reverse(char *filename,int number);
+static int peek_reverse(char *filename,int number,int *running_line_no);
 
 static char *history_path(ShellState *shell){
     char *path=malloc(strlen(shell->home)+20);
@@ -329,7 +329,7 @@ static int compare_names(const void *a,const void *b){
     return strcmp(*x,*y);
 }
 
-static void print_dir(char *path,int all,int recursive){
+static void print_dir(char *path,int all,int recursive,const char *prefix){
     DIR *dir=opendir(path);
 
     if(dir==NULL) return;
@@ -376,13 +376,19 @@ static void print_dir(char *path,int all,int recursive){
         );
 
         struct stat st;
+        int is_dir=(stat(full,&st)==0 && S_ISDIR(st.st_mode));
 
-        if(stat(full,&st)==0 && S_ISDIR(st.st_mode)) printf("%s/\n",names[i]);
-        else printf("%s\n",names[i]);
-        if(recursive &&
-           stat(full,&st)==0 &&
-           S_ISDIR(st.st_mode)){
-            print_dir(full,all,recursive);
+        if(recursive){
+            if(is_dir) printf("%s%s/\n",prefix,names[i]);
+            else printf("%s%s\n",prefix,names[i]);
+        }else{
+            printf("%s\n",names[i]);
+        }
+
+        if(recursive && is_dir){
+            char sub_prefix[4096];
+            snprintf(sub_prefix,sizeof(sub_prefix),"%s%s/",prefix,names[i]);
+            print_dir(full,all,recursive,sub_prefix);
         }
 
         free(names[i]);//free memory
@@ -435,30 +441,28 @@ int reveal(ShellState *shell,char **args,int count){
         return 0;
     }
 
-    print_dir(path,all,recursive);
+    print_dir(path,all,recursive,"");
     free(path);
     return 1;
 }
 
-static void print_lines(char **lines,int count,int number,int reverse){
+static void print_lines(char **lines,int count,int number,int reverse,int *running_line_no){
     if(reverse){
-        // for(int i=count-1;i>=0;i--){
-        //     if(number) printf("%d %s",i+1,lines[i]);
-        //     else printf("%s",lines[i]);
-        // }
-        int line_no=0;
+        int nonempty=0;
 
         if(number){
             for(int i=0;i<count;i++){
                 if(lines[i][0]!='\n' && lines[i][0]!='\0')
-                    line_no++;
+                    nonempty++;
             }
         }
+
+        int line_no= *running_line_no + nonempty - 1;
 
         for(int i=count-1;i>=0;i--){
             if(number){
                 if(lines[i][0]!='\n' && lines[i][0]!='\0'){
-                    printf("%d %s",line_no,lines[i]);
+                    printf("%d %s",line_no+1,lines[i]);
                     line_no--;
                 }
                 else{
@@ -469,15 +473,17 @@ static void print_lines(char **lines,int count,int number,int reverse){
                 printf("%s",lines[i]);
             }
         }
+        *running_line_no += nonempty;
     }
     else{
-        int line_no=1;
-
         for(int i=0;i<count;i++){
             if(number){
                 if(lines[i][0]!='\n' && lines[i][0]!='\0'){
-                    printf("%d %s",line_no,lines[i]);
-                    line_no++;
+                    printf("%d %s",*running_line_no+1,lines[i]);
+                    (*running_line_no)++;
+                }
+                else{
+                    printf("%s",lines[i]);
                 }
             }
             else printf("%s",lines[i]);
@@ -486,7 +492,7 @@ static void print_lines(char **lines,int count,int number,int reverse){
     }
 }
 
-static int peek_file(char *filename,int number,int reverse){
+static int peek_file(char *filename,int number,int reverse,int *running_line_no){
     FILE *file;
 
     if(strcmp(filename,"-")==0) file=stdin;
@@ -503,7 +509,7 @@ static int peek_file(char *filename,int number,int reverse){
             printf("peek: is a directory\n");
             return 0;
         }
-        if(reverse && S_ISREG(st.st_mode)) return peek_reverse(filename,number);
+        if(reverse && S_ISREG(st.st_mode)) return peek_reverse(filename,number,running_line_no);
 
         file=fopen(filename,"r");
 
@@ -558,7 +564,7 @@ static int peek_file(char *filename,int number,int reverse){
 
     if(file!=stdin) fclose(file);
 
-    print_lines(lines,count,number,reverse);
+    print_lines(lines,count,number,reverse,running_line_no);
 
     for(int i=0;i<count;i++) free(lines[i]);
 
@@ -567,7 +573,7 @@ static int peek_file(char *filename,int number,int reverse){
     return 1;
 }
 
-static int peek_reverse(char *filename,int number){
+static int peek_reverse(char *filename,int number,int *running_line_no){
     int fd=open(filename,O_RDONLY);
 
     if(fd<0){
@@ -614,7 +620,7 @@ static int peek_reverse(char *filename,int number){
         return 0;
     }
 
-    int current_no=line_no;
+    int current_no= *running_line_no + line_no;
 
     while(end>0){
         // int chunk=end>sizeof(buf) ? sizeof(buf) : end; possibly caused error idk exactly why
@@ -669,6 +675,8 @@ static int peek_reverse(char *filename,int number){
     free(line);
     close(fd);
 
+    *running_line_no += line_no;
+
     return 1;
 }
 
@@ -677,6 +685,7 @@ int peek(char **args,int count){
     int number=0;
     int reverse=0;
     int files=0;
+    int running_line_no=0;
 
     for(int i=0;i<count;i++){
         if(args[i][0]=='-' && args[i][1]!='\0'){
@@ -694,13 +703,13 @@ int peek(char **args,int count){
         }
     }
 
-    if(files==0) return peek_file("-",number,reverse);
+    if(files==0) return peek_file("-",number,reverse,&running_line_no);
 
     for(int i=0;i<count;i++){
 
         if(args[i][0]=='-' && args[i][1]!='\0') continue;
 
-        if(!peek_file(args[i],number,reverse)) return 0;
+        if(!peek_file(args[i],number,reverse,&running_line_no)) continue;
     }
 
     return 1;
@@ -923,6 +932,8 @@ static int command_exists(const char *cmd) {
 struct syscall_entry {
     long scno;
     long count;
+    double total_time;
+    int first_seen;
     const char *name;
     char dyn_name[32];
 };
@@ -931,9 +942,9 @@ static int snoop_cmp(const void *a, const void *b) {
     const struct syscall_entry *ea = (const struct syscall_entry *)a;
     const struct syscall_entry *eb = (const struct syscall_entry *)b;
     if (ea->count != eb->count) {
-        return (ea->count < eb->count) ? 1 : -1; // Descending by count
+        return (ea->count < eb->count) ? 1 : -1;
     }
-    return (ea->scno > eb->scno) ? 1 : (ea->scno < eb->scno ? -1 : 0); // Ascending by scno
+    return (ea->first_seen > eb->first_seen) ? 1 : (ea->first_seen < eb->first_seen ? -1 : 0);
 }
 
 static volatile sig_atomic_t snoop_interrupted = 0;
@@ -1052,11 +1063,17 @@ int snoop(char **args, int count) {
     }
 
     long counts[MAX_SYSCALL] = {0};
+    double times[MAX_SYSCALL] = {0};
+    int order[MAX_SYSCALL] = {0};
     long unknown_counts[1024] = {0};
+    double unknown_times[1024] = {0};
     long unknown_scnos[1024] = {0};
+    int unknown_order[1024] = {0};
     int num_unknown = 0;
+    int order_counter = 0;
     int in_syscall = 0;
     long current_syscall = -1;
+    struct timespec entry_ts = {0, 0};
 
     struct sigaction old_sa, new_sa;
     int sigaction_ok = 0;
@@ -1120,21 +1137,31 @@ int snoop(char **args, int count) {
                         break;
                     }
                     current_syscall = regs.orig_rax;
+                    clock_gettime(CLOCK_MONOTONIC, &entry_ts);
                     in_syscall = 1;
                 } else {
+                    struct timespec exit_ts;
+                    clock_gettime(CLOCK_MONOTONIC, &exit_ts);
+                    double dur = (exit_ts.tv_sec - entry_ts.tv_sec)
+                               + (exit_ts.tv_nsec - entry_ts.tv_nsec) / 1e9;
                     in_syscall = 0;
                     if (current_syscall >= 0 && current_syscall < MAX_SYSCALL) {
+                        if (counts[current_syscall] == 0) order[current_syscall] = ++order_counter;
                         counts[current_syscall]++;
+                        times[current_syscall] += dur;
                     } else if (current_syscall != -1) {
                         int found = 0;
                         for (int i = 0; i < num_unknown; i++) {
                             if (unknown_scnos[i] == current_syscall) {
-                                unknown_counts[i]++; found = 1; break;
+                                unknown_counts[i]++; unknown_times[i] += dur; found = 1; break;
                             }
                         }
                         if (!found && num_unknown < 1024) {
                             unknown_scnos[num_unknown] = current_syscall;
-                            unknown_counts[num_unknown++] = 1;
+                            unknown_counts[num_unknown] = 1;
+                            unknown_times[num_unknown] = dur;
+                            unknown_order[num_unknown] = ++order_counter;
+                            num_unknown++;
                         }
                     }
                     current_syscall = -1;
@@ -1194,6 +1221,8 @@ int snoop(char **args, int count) {
             if (counts[i] > 0) {
                 entries[idx].scno = i;
                 entries[idx].count = counts[i];
+                entries[idx].total_time = times[i];
+                entries[idx].first_seen = order[i];
                 if (syscall_names[i] != NULL) {
                     entries[idx].name = syscall_names[i];
                 } else {
@@ -1206,6 +1235,8 @@ int snoop(char **args, int count) {
         for (int i = 0; i < num_unknown; i++) {
             entries[idx].scno = unknown_scnos[i];
             entries[idx].count = unknown_counts[i];
+            entries[idx].total_time = unknown_times[i];
+            entries[idx].first_seen = unknown_order[i];
             snprintf(entries[idx].dyn_name, sizeof(entries[idx].dyn_name), "syscall_%ld", unknown_scnos[i]);
             entries[idx].name = entries[idx].dyn_name;
             idx++;
@@ -1214,10 +1245,10 @@ int snoop(char **args, int count) {
         qsort(entries, total_unique, sizeof(struct syscall_entry), snoop_cmp);
     }
 
-    printf("%-20s %s\n", "SYSCALL", "COUNT");
-    printf("--------------------------------\n");
+    printf("%-20s %10s %12s\n", "SYSCALL", "COUNT", "TIME");
+    printf("--------------------------------------------\n");
     for (int i = 0; i < total_unique; i++) {
-        printf("%-20s %ld\n", entries[i].name, entries[i].count);
+        printf("%-20s %10ld %11.6fs\n", entries[i].name, entries[i].count, entries[i].total_time);
     }
     if (entries) free(entries);
 

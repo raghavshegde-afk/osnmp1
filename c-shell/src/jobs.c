@@ -100,7 +100,7 @@ void reap_jobs(void){
                 if(jobs[i].process_count==0){
                     /* All processes done – print completion using pgid */
                     pid_t pgid=jobs[i].pgid;
-                    if(WIFEXITED(status) && WEXITSTATUS(status)==0)
+                    if(WIFEXITED(status))
                         printf("%s with pid %d exited normally\n",jobs[i].job_name,pgid);
                     else
                         printf("%s with pid %d exited abnormally\n",jobs[i].job_name,pgid);
@@ -137,7 +137,7 @@ void print_activities(void){
                 }
                 fclose(f);
             }
-            printf("%d %s %s\n",pid,jobs[i].command_names[p],state_str);
+            printf("  %d %s %s\n",pid,jobs[i].command_names[p],state_str);
         }
     }
 }

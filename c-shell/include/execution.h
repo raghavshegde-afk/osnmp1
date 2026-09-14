@@ -34,5 +34,6 @@ typedef struct {
 
 pid_t execute_command(Command *command);
 pid_t execute_pipeline(Command *commands, int count, int background, pid_t *out_pids);
+int validate_redirections(Redir *redirs, int red_count);
 
 #endif

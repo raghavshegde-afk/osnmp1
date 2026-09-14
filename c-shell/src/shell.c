@@ -41,6 +41,7 @@ void print_prompt(ShellState *shell){
     }//dunno cwd then stop
 
     char *username = getenv("USER");
+    if (!username) username = "unknown";
     /*
     USER is an environment variable containing the username.
     getenv() returns a pointer to the value stored in the environment; we do NOT free username.

@@ -1,9 +1,11 @@
 CC = gcc
 
-CFLAGS = -Wall -Wextra -std=c2x -Iinclude -g -D_POSIX_C_SOURCE=200809L
+CFLAGS = -std=c23 -D_POSIX_C_SOURCE=200809L -D_XOPEN_SOURCE=700 \
+         -Wall -Wextra -Werror -Wno-unused-parameter -fno-asm \
+         -Iinclude -g
 LDLIBS = -lm
 
-TARGET = cshell
+TARGET = shell.out
 
 SRC = src/main.c \
       src/shell.c \
